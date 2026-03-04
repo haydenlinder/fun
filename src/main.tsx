@@ -211,6 +211,9 @@ function DestructibleTree({ x, y, z, scale }: { x: number, y: number, z: number,
     
     setFragments(allFragments)
     setDestroyed(true)
+    
+    // Play blast sound effect
+    playBlastSound()
   }, [destroyed, x, y, z, scale])
   
   if (destroyed) {
@@ -783,6 +786,79 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   )
 }
 
+// Play blast/explosion sound effect when something is destroyed
+function playBlastSound() {
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  
+  // Create noise for explosion texture
+  const bufferSize = audioContext.sampleRate * 0.3 // 300ms of noise
+  const noiseBuffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate)
+  const noiseData = noiseBuffer.getChannelData(0)
+  for (let i = 0; i < bufferSize; i++) {
+    noiseData[i] = Math.random() * 2 - 1
+  }
+  
+  const noiseSource = audioContext.createBufferSource()
+  noiseSource.buffer = noiseBuffer
+  
+  // Filter for rumble effect
+  const lowpass = audioContext.createBiquadFilter()
+  lowpass.type = 'lowpass'
+  lowpass.frequency.setValueAtTime(400, audioContext.currentTime + 0.15)
+  lowpass.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.3)
+  
+  // Gain envelope for explosion
+  const noiseGain = audioContext.createGain()
+  noiseGain.gain.setValueAtTime(0.6, audioContext.currentTime + 0.15)
+  noiseGain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
+  
+  noiseSource.connect(lowpass)
+  lowpass.connect(noiseGain)
+  noiseGain.connect(audioContext.destination)
+  
+  // Add a low frequency "boom" oscillator
+  const oscillator = audioContext.createOscillator()
+  const oscGain = audioContext.createGain()
+  
+  oscillator.type = 'sine'
+  oscillator.frequency.setValueAtTime(150, audioContext.currentTime + 0.15)
+  oscillator.frequency.exponentialRampToValueAtTime(30, audioContext.currentTime + 0.2)
+  
+  oscGain.gain.setValueAtTime(0.5, audioContext.currentTime + 0.15)
+  oscGain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.25)
+  
+  oscillator.connect(oscGain)
+  oscGain.connect(audioContext.destination)
+  
+  // Add a crackle/debris sound - higher frequency burst
+  const crackleOsc = audioContext.createOscillator()
+  const crackleGain = audioContext.createGain()
+  
+  crackleOsc.type = 'square'
+  crackleOsc.frequency.setValueAtTime(800, audioContext.currentTime + 0.15)
+  crackleOsc.frequency.exponentialRampToValueAtTime(200, audioContext.currentTime + 0.08)
+  
+  crackleGain.gain.setValueAtTime(0.15, audioContext.currentTime + 0.15)
+  crackleGain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1)
+  
+  crackleOsc.connect(crackleGain)
+  crackleGain.connect(audioContext.destination)
+  
+  // Start all sounds
+  noiseSource.start(audioContext.currentTime + 0.15)
+  oscillator.start(audioContext.currentTime + 0.15)
+  crackleOsc.start(audioContext.currentTime + 0.15)
+  
+  noiseSource.stop(audioContext.currentTime + 0.3)
+  oscillator.stop(audioContext.currentTime + 0.25)
+  crackleOsc.stop(audioContext.currentTime + 0.1)
+  
+  // Clean up
+  setTimeout(() => {
+    audioContext.close()
+  }, 400)
+}
+
 // Play laser sound effect using Web Audio API
 function playLaserSound() {
   const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
@@ -1049,6 +1125,9 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
     
     setFragments(allFragments)
     setDestroyed(true)
+    
+    // Play blast sound effect
+    playBlastSound()
   }, [destroyed, scale, lastPosition])
   
   useFrame((frameState, delta) => {
@@ -1310,6 +1389,9 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
     
     setFragments(allFragments)
     setDestroyed(true)
+    
+    // Play blast sound effect
+    playBlastSound()
   }, [destroyed, x, y, z, scale, rotY])
   
   if (destroyed) {
