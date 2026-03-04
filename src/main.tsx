@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { useRef, useMemo, useEffect, useState, useCallback } from 'react'
 import { Canvas, useFrame, extend, useThree } from '@react-three/fiber'
 import { OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
-import { Physics, RigidBody, CuboidCollider, useRapier } from '@react-three/rapier'
+import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
 
@@ -144,7 +144,6 @@ function Water() {
 
 // Single destructible tree component
 function DestructibleTree({ x, y, z, scale }: { x: number, y: number, z: number, scale: number }) {
-  const { scene } = useThree()
   const groupRef = useRef<THREE.Group>(null!)
   const [destroyed, setDestroyed] = useState(false)
   const [fragments, setFragments] = useState<THREE.Mesh[]>([])
@@ -478,7 +477,7 @@ function Grass() {
   const meshRef = useRef<THREE.Mesh>(null!)
   const materialRef = useRef<any>(null!)
   const [geometry, setGeometry] = useState<THREE.InstancedBufferGeometry | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
+  const [_, setIsLoading] = useState(true)
   
   // Create base blade geometry (small, runs on main thread)
   const bladeGeo = useMemo(() => {
@@ -907,7 +906,7 @@ function playLaserSound() {
 
 // Laser system - manages all active lasers and listens for clicks
 function LaserSystem() {
-  const { camera, scene, gl, viewport } = useThree()
+  const { camera, scene, gl } = useThree()
   const [lasers, setLasers] = useState<LaserData[]>([])
   const nextLaserId = useRef(0)
   const lastFireTime = useRef(0)
