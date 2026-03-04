@@ -783,6 +783,52 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   )
 }
 
+// Play laser sound effect using Web Audio API
+function playLaserSound() {
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  
+  // Create oscillator for the main laser tone
+  const oscillator = audioContext.createOscillator()
+  const gainNode = audioContext.createGain()
+  
+  // Connect nodes
+  oscillator.connect(gainNode)
+  gainNode.connect(audioContext.destination)
+  
+  // Set up the laser sound - start high, sweep down
+  oscillator.type = 'sawtooth'
+  oscillator.frequency.setValueAtTime(3000, audioContext.currentTime)
+  oscillator.frequency.exponentialRampToValueAtTime(50, audioContext.currentTime + 0.15)
+  
+  // Quick attack, fast decay for that "pew" effect
+  gainNode.gain.setValueAtTime(0.3, audioContext.currentTime)
+  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.3)
+  
+  // Add a secondary oscillator for texture
+  const oscillator2 = audioContext.createOscillator()
+  const gainNode2 = audioContext.createGain()
+  oscillator2.connect(gainNode2)
+  gainNode2.connect(audioContext.destination)
+  
+  oscillator2.type = 'square'
+  oscillator2.frequency.setValueAtTime(800, audioContext.currentTime)
+  oscillator2.frequency.exponentialRampToValueAtTime(100, audioContext.currentTime + 0.1)
+  
+  gainNode2.gain.setValueAtTime(0.1, audioContext.currentTime)
+  gainNode2.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.1)
+  
+  // Start and stop the oscillators
+  oscillator.start(audioContext.currentTime)
+  oscillator.stop(audioContext.currentTime + 0.15)
+  oscillator2.start(audioContext.currentTime)
+  oscillator2.stop(audioContext.currentTime + 0.1)
+  
+  // Clean up audio context after sound finishes
+  setTimeout(() => {
+    audioContext.close()
+  }, 200)
+}
+
 // Laser system - manages all active lasers and listens for clicks
 function LaserSystem() {
   const { camera, scene, gl, viewport } = useThree()
@@ -832,6 +878,9 @@ function LaserSystem() {
           end,
           createdAt: performance.now()
         }
+        
+        // Play laser sound effect
+        playLaserSound()
         
         setLasers(prev => [...prev, newLaser])
         
