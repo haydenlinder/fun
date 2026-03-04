@@ -918,7 +918,7 @@ function LaserSystem() {
         // Remove laser after animation completes
         setTimeout(() => {
           setLasers(prev => prev.filter(l => l.id !== newLaser.id))
-        }, 500)
+        }, 200)
       }
     }
     
