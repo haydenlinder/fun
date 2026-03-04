@@ -431,7 +431,7 @@ function Trees() {
   const trees = useMemo(() => {
     const treeData = []
     const rng = seededRandom(54321) // Use seeded random for consistent tree placement
-    for (let i = 0; i < 2000; i++) {
+    for (let i = 0; i < 1000; i++) {
       const x = (rng() - 0.5) * 900
       const z = (rng() - 0.5) * 900
       const height = getTerrainHeight(x, z)
@@ -1592,7 +1592,7 @@ function Scene() {
       />
       
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['white', 10, 1000]} />
+      <fog attach="fog" args={['white', 0, 1500]} />
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
