@@ -1310,11 +1310,12 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 500 }}
+    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 1000 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
       <Scene />
+      <fog attach="fog" args={['white']}/>
     </Physics>
   </Canvas>,
 )
