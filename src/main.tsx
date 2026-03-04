@@ -6,6 +6,7 @@ import { OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
+import "./App.css"
 
 // Import web worker for grass generation
 import GrassWorker from './grassWorker?worker'
