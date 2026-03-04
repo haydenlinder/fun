@@ -485,9 +485,47 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   )
 }
 
+// Shared AudioContext for mobile compatibility
+let sharedAudioContext: AudioContext | null = null
+
+function getAudioContext(): AudioContext | null {
+  if (!sharedAudioContext) {
+    sharedAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  }
+  
+  // Resume if suspended (required for mobile after user gesture)
+  if (sharedAudioContext.state === 'suspended') {
+    sharedAudioContext.resume()
+  }
+  
+  return sharedAudioContext
+}
+
+// Initialize audio on first user interaction (required for mobile)
+function initAudioOnInteraction() {
+  const initAudio = () => {
+    const ctx = getAudioContext()
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume()
+    }
+    // Remove listeners after first interaction
+    document.removeEventListener('touchstart', initAudio)
+    document.removeEventListener('touchend', initAudio)
+    document.removeEventListener('click', initAudio)
+  }
+  
+  document.addEventListener('touchstart', initAudio, { once: true })
+  document.addEventListener('touchend', initAudio, { once: true })
+  document.addEventListener('click', initAudio, { once: true })
+}
+
+// Call this immediately to set up listeners
+initAudioOnInteraction()
+
 // Play blast/explosion sound effect when something is destroyed
 function playBlastSound() {
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  const audioContext = getAudioContext()
+  if (!audioContext) return
   
   // Create noise for explosion texture
   const bufferSize = audioContext.sampleRate * 0.3 // 300ms of noise
@@ -551,16 +589,12 @@ function playBlastSound() {
   noiseSource.stop(audioContext.currentTime + 0.3)
   oscillator.stop(audioContext.currentTime + 0.25)
   crackleOsc.stop(audioContext.currentTime + 0.1)
-  
-  // Clean up
-  setTimeout(() => {
-    audioContext.close()
-  }, 400)
 }
 
 // Play laser sound effect using Web Audio API
 function playLaserSound() {
-  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
+  const audioContext = getAudioContext()
+  if (!audioContext) return
   
   // Create oscillator for the main laser tone
   const oscillator = audioContext.createOscillator()
@@ -597,11 +631,6 @@ function playLaserSound() {
   oscillator.stop(audioContext.currentTime + 0.15)
   oscillator2.start(audioContext.currentTime)
   oscillator2.stop(audioContext.currentTime + 0.1)
-  
-  // Clean up audio context after sound finishes
-  setTimeout(() => {
-    audioContext.close()
-  }, 200)
 }
 
 // Laser system - manages all active lasers and listens for clicks
