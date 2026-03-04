@@ -1,10 +1,11 @@
 import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
-import { useRef, useMemo, useEffect, useState } from 'react'
-import { Canvas, useFrame, extend } from '@react-three/fiber'
+import { useRef, useMemo, useEffect, useState, useCallback } from 'react'
+import { Canvas, useFrame, extend, useThree } from '@react-three/fiber'
 import { OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider, useRapier } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
+import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
 
 // Import web worker for grass generation
 import GrassWorker from './grassWorker?worker'
@@ -141,6 +142,109 @@ function Water() {
   )
 }
 
+// Single destructible tree component
+function DestructibleTree({ x, y, z, scale }: { x: number, y: number, z: number, scale: number }) {
+  const { scene } = useThree()
+  const groupRef = useRef<THREE.Group>(null!)
+  const [destroyed, setDestroyed] = useState(false)
+  const [fragments, setFragments] = useState<THREE.Mesh[]>([])
+  
+  const handleClick = useCallback(() => {
+    if (destroyed) return
+    
+    // Create geometries and materials for the tree parts
+    const trunkGeo = new THREE.CylinderGeometry(0.2, 0.3, 2, 8)
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x5D4037, roughness: 0.9 })
+    const trunkInnerMat = new THREE.MeshStandardMaterial({ color: 0x8D6E63, roughness: 0.9 })
+    
+    const foliage1Geo = new THREE.ConeGeometry(1.2, 2, 8)
+    const foliage2Geo = new THREE.ConeGeometry(0.9, 1.5, 8)
+    const foliage3Geo = new THREE.ConeGeometry(0.6, 1.2, 8)
+    const foliageMat1 = new THREE.MeshStandardMaterial({ color: 0x2E7D32, roughness: 0.8 })
+    const foliageMat2 = new THREE.MeshStandardMaterial({ color: 0x388E3C, roughness: 0.8 })
+    const foliageMat3 = new THREE.MeshStandardMaterial({ color: 0x43A047, roughness: 0.8 })
+    const foliageInnerMat = new THREE.MeshStandardMaterial({ color: 0x1B5E20, roughness: 0.8 })
+    
+    const allFragments: THREE.Mesh[] = []
+    
+    const options = new FractureOptions({
+      fractureMethod: 'voronoi',
+      fragmentCount: 8,
+      voronoiOptions: {
+        mode: '3D',
+      },
+    })
+    
+    // Fracture trunk
+    const trunkMesh = new DestructibleMesh(trunkGeo, trunkMat, trunkInnerMat)
+    trunkMesh.position.set(0, 1 * scale, 0)
+    trunkMesh.scale.setScalar(scale)
+    trunkMesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    // Fracture foliage layers
+    const foliage1Mesh = new DestructibleMesh(foliage1Geo, foliageMat1, foliageInnerMat)
+    foliage1Mesh.position.set(0, 2.5 * scale, 0)
+    foliage1Mesh.scale.setScalar(scale)
+    foliage1Mesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    const foliage2Mesh = new DestructibleMesh(foliage2Geo, foliageMat2, foliageInnerMat)
+    foliage2Mesh.position.set(0, 3.5 * scale, 0)
+    foliage2Mesh.scale.setScalar(scale)
+    foliage2Mesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    const foliage3Mesh = new DestructibleMesh(foliage3Geo, foliageMat3, foliageInnerMat)
+    foliage3Mesh.position.set(0, 4.3 * scale, 0)
+    foliage3Mesh.scale.setScalar(scale)
+    foliage3Mesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    setFragments(allFragments)
+    setDestroyed(true)
+  }, [destroyed, x, y, z, scale])
+  
+  if (destroyed) {
+    return (
+      <FragmentsContainer 
+        fragments={fragments} 
+      />
+    )
+  }
+  
+  return (
+    <group ref={groupRef} position={[x, y, z]} scale={scale} onClick={handleClick}>
+      {/* Trunk */}
+      <mesh position={[0, 1, 0]} castShadow>
+        <cylinderGeometry args={[0.2, 0.3, 2, 8]} />
+        <meshStandardMaterial color="#5D4037" roughness={0.9} />
+      </mesh>
+      {/* Foliage layers */}
+      <mesh position={[0, 2.5, 0]} castShadow>
+        <coneGeometry args={[1.2, 2, 8]} />
+        <meshStandardMaterial color="#2E7D32" roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 3.5, 0]} castShadow>
+        <coneGeometry args={[0.9, 1.5, 8]} />
+        <meshStandardMaterial color="#388E3C" roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 4.3, 0]} castShadow>
+        <coneGeometry args={[0.6, 1.2, 8]} />
+        <meshStandardMaterial color="#43A047" roughness={0.8} />
+      </mesh>
+    </group>
+  )
+}
+
 function Trees() {
   const trees = useMemo(() => {
     const treeData = []
@@ -167,26 +271,13 @@ function Trees() {
   return (
     <group>
       {trees.map((tree, i) => (
-        <group key={i} position={[tree.x, tree.y, tree.z]} scale={tree.scale}>
-          {/* Trunk */}
-          <mesh position={[0, 1, 0]} castShadow>
-            <cylinderGeometry args={[0.2, 0.3, 2, 8]} />
-            <meshStandardMaterial color="#5D4037" roughness={0.9} />
-          </mesh>
-          {/* Foliage layers */}
-          <mesh position={[0, 2.5, 0]} castShadow>
-            <coneGeometry args={[1.2, 2, 8]} />
-            <meshStandardMaterial color="#2E7D32" roughness={0.8} />
-          </mesh>
-          <mesh position={[0, 3.5, 0]} castShadow>
-            <coneGeometry args={[0.9, 1.5, 8]} />
-            <meshStandardMaterial color="#388E3C" roughness={0.8} />
-          </mesh>
-          <mesh position={[0, 4.3, 0]} castShadow>
-            <coneGeometry args={[0.6, 1.2, 8]} />
-            <meshStandardMaterial color="#43A047" roughness={0.8} />
-          </mesh>
-        </group>
+        <DestructibleTree 
+          key={i}
+          x={tree.x}
+          y={tree.y}
+          z={tree.z}
+          scale={tree.scale}
+        />
       ))}
     </group>
   )
@@ -485,6 +576,116 @@ function Grass() {
   )
 }
 
+// Fragment component with physics - used for destruction debris
+function Fragment({ 
+  fragment
+}: { 
+  fragment: THREE.Mesh
+}) {
+  const meshRef = useRef<THREE.Mesh>(null!)
+  const velocityRef = useRef(new THREE.Vector3(
+    (Math.random() - 0.5) * 8,
+    Math.random() * 5 + 2,
+    (Math.random() - 0.5) * 8
+  ))
+  const angularVelRef = useRef(new THREE.Vector3(
+    (Math.random() - 0.5) * 10,
+    (Math.random() - 0.5) * 10,
+    (Math.random() - 0.5) * 10
+  ))
+  const [opacity, setOpacity] = useState(1)
+  const startTime = useRef(0)
+  
+  // Store the initial position from the fragment
+  const initialPos = useMemo(() => fragment.position.clone(), [fragment])
+  
+  // Clone the fragment and use its geometry/material - MUST be before any conditional returns
+  const clonedFragment = useMemo(() => {
+    const clone = fragment.clone()
+    // Ensure the material is transparent for fading
+    if (clone.material) {
+      if (Array.isArray(clone.material)) {
+        clone.material = clone.material.map(m => {
+          const cloned = m.clone()
+          cloned.transparent = true
+          return cloned
+        })
+      } else if (clone.material.clone) {
+        const mat = clone.material.clone()
+        mat.transparent = true
+        clone.material = mat
+      }
+    }
+    return clone
+  }, [fragment])
+  
+  useFrame((state, delta) => {
+    if (!meshRef.current || opacity <= 0) return
+    
+    if (startTime.current === 0) {
+      startTime.current = state.clock.elapsedTime
+    }
+    
+    const elapsed = state.clock.elapsedTime - startTime.current
+    
+    // Apply gravity
+    velocityRef.current.y -= 15 * delta
+    
+    // Update position
+    meshRef.current.position.x += velocityRef.current.x * delta
+    meshRef.current.position.y += velocityRef.current.y * delta
+    meshRef.current.position.z += velocityRef.current.z * delta
+    
+    // Update rotation
+    meshRef.current.rotation.x += angularVelRef.current.x * delta
+    meshRef.current.rotation.y += angularVelRef.current.y * delta
+    meshRef.current.rotation.z += angularVelRef.current.z * delta
+    
+    // Ground collision
+    const groundHeight = getTerrainHeight(meshRef.current.position.x, meshRef.current.position.z)
+    if (meshRef.current.position.y < groundHeight) {
+      meshRef.current.position.y = groundHeight
+      velocityRef.current.y *= -0.3
+      velocityRef.current.x *= 0.8
+      velocityRef.current.z *= 0.8
+      angularVelRef.current.multiplyScalar(0.8)
+    }
+    
+    // Fade out after 2 seconds
+    if (elapsed > 2) {
+      const fadeProgress = (elapsed - 2) / 2
+      setOpacity(Math.max(0, 1 - fadeProgress))
+    }
+  })
+  
+  if (opacity <= 0) return null
+  
+  return (
+    <primitive 
+      ref={meshRef}
+      object={clonedFragment}
+      position={initialPos}
+      castShadow
+    />
+  )
+}
+
+// Fragments container component
+function FragmentsContainer({ fragments }: { 
+  fragments: THREE.Mesh[]
+}) {
+  return (
+    <group>
+      {fragments.map((frag, i) => (
+        <Fragment 
+          key={i}
+          fragment={frag}
+        />
+      ))}
+    </group>
+  )
+}
+
 // Helper to get terrain height at a position
 function getTerrainHeight(x: number, z: number): number {
   const nx = (x / 200) + 0.5
@@ -497,7 +698,7 @@ function getTerrainHeight(x: number, z: number): number {
   return height
 }
 
-// Single sheep with physics body
+// Single sheep with physics body - now destructible
 function SingleSheep({ initialX, initialZ, scale, phase }: { 
   initialX: number
   initialZ: number
@@ -506,6 +707,9 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
 }) {
   const rigidBodyRef = useRef<RapierRigidBody>(null!)
   const visualGroupRef = useRef<THREE.Group>(null!)
+  const [destroyed, setDestroyed] = useState(false)
+  const [fragments, setFragments] = useState<THREE.Mesh[]>([])
+  const [lastPosition, setLastPosition] = useState<[number, number, number]>([initialX, getTerrainHeight(initialX, initialZ) + 2, initialZ])
   
   // Mutable state for movement behavior
   const state = useRef({
@@ -517,7 +721,76 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
     isMoving: Math.random() > 0.5
   })
   
+  const handleClick = useCallback(() => {
+    if (destroyed) return
+    
+    // Get current position from physics body
+    let currentPos = lastPosition
+    if (rigidBodyRef.current) {
+      const pos = rigidBodyRef.current.translation()
+      currentPos = [pos.x, pos.y, pos.z]
+    }
+    
+    const woolMat = new THREE.MeshStandardMaterial({ color: 0xF5F5F0, roughness: 1 })
+    const woolInnerMat = new THREE.MeshStandardMaterial({ color: 0xE0E0E0, roughness: 1 })
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x2D2D2D, roughness: 0.8 })
+    const darkInnerMat = new THREE.MeshStandardMaterial({ color: 0x1A1A1A, roughness: 0.8 })
+    
+    const allFragments: THREE.Mesh[] = []
+    
+    const options = new FractureOptions({
+      fractureMethod: 'voronoi',
+      fragmentCount: 6,
+      voronoiOptions: {
+        mode: '3D',
+      },
+    })
+    
+    // Fracture main body - use local positions, add world position in callback
+    const bodyGeo = new THREE.SphereGeometry(0.6, 12, 10)
+    const bodyMesh = new DestructibleMesh(bodyGeo, woolMat, woolInnerMat)
+    bodyMesh.position.set(0, 0.6 * scale, 0)
+    bodyMesh.scale.setScalar(scale)
+    bodyMesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(currentPos[0], currentPos[1], currentPos[2]))
+      allFragments.push(fragment)
+    })
+    
+    // Fracture head
+    const headGeo = new THREE.SphereGeometry(0.28, 10, 8)
+    const headMesh = new DestructibleMesh(headGeo, darkMat, darkInnerMat)
+    headMesh.position.set(0.65 * scale, 0.65 * scale, 0)
+    headMesh.scale.setScalar(scale)
+    headMesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(currentPos[0], currentPos[1], currentPos[2]))
+      allFragments.push(fragment)
+    })
+    
+    // Fracture wool puffs
+    const puff1Geo = new THREE.SphereGeometry(0.35, 8, 8)
+    const puff1Mesh = new DestructibleMesh(puff1Geo, woolMat, woolInnerMat)
+    puff1Mesh.position.set(0.2 * scale, 0.75 * scale, 0.2 * scale)
+    puff1Mesh.scale.setScalar(scale)
+    puff1Mesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(currentPos[0], currentPos[1], currentPos[2]))
+      allFragments.push(fragment)
+    })
+    
+    const puff2Geo = new THREE.SphereGeometry(0.32, 8, 8)
+    const puff2Mesh = new DestructibleMesh(puff2Geo, woolMat, woolInnerMat)
+    puff2Mesh.position.set(-0.2 * scale, 0.75 * scale, -0.15 * scale)
+    puff2Mesh.scale.setScalar(scale)
+    puff2Mesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(currentPos[0], currentPos[1], currentPos[2]))
+      allFragments.push(fragment)
+    })
+    
+    setFragments(allFragments)
+    setDestroyed(true)
+  }, [destroyed, scale, lastPosition])
+  
   useFrame((frameState, delta) => {
+    if (destroyed) return
     if (!rigidBodyRef.current || !visualGroupRef.current) return
     
     const time = frameState.clock.elapsedTime
@@ -527,6 +800,9 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
     const position = rigidBodyRef.current.translation()
     const currentX = position.x
     const currentZ = position.z
+    
+    // Update last position for destruction
+    setLastPosition([position.x, position.y, position.z])
     
     // Check if it's time to change direction
     if (time > sheep.nextDirectionChange) {
@@ -602,6 +878,14 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
   
   const startHeight = getTerrainHeight(initialX, initialZ) + 2 // Start slightly above ground
   
+  if (destroyed) {
+    return (
+      <FragmentsContainer 
+        fragments={fragments} 
+      />
+    )
+  }
+  
   return (
     <RigidBody
       ref={rigidBodyRef}
@@ -614,7 +898,7 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
       friction={1}
     >
       <CuboidCollider args={[0.4 * scale, 0.4 * scale, 0.5 * scale]} position={[0, 0.5 * scale, 0]} />
-      <group ref={visualGroupRef} scale={scale}>
+      <group ref={visualGroupRef} scale={scale} onClick={handleClick}>
         {/* Body - fluffy wool */}
         <mesh position={[0, 0.6, 0]} castShadow>
           <sphereGeometry args={[0.6, 12, 10]} />
@@ -731,6 +1015,67 @@ function Sheep() {
   )
 }
 
+// Single destructible rock component
+function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: number, scale: number, rotY: number }) {
+  const [destroyed, setDestroyed] = useState(false)
+  const [fragments, setFragments] = useState<THREE.Mesh[]>([])
+  
+  const handleClick = useCallback(() => {
+    if (destroyed) return
+    
+    const rockGeo = new THREE.DodecahedronGeometry(1, 0)
+    const rockMat = new THREE.MeshStandardMaterial({ color: 0x757575, roughness: 0.95, metalness: 0.05 })
+    const rockInnerMat = new THREE.MeshStandardMaterial({ color: 0x5a5a5a, roughness: 0.95, metalness: 0.05 })
+    
+    const options = new FractureOptions({
+      fractureMethod: 'voronoi',
+      fragmentCount: 12,
+      voronoiOptions: {
+        mode: '3D',
+      },
+    })
+    
+    const rockMesh = new DestructibleMesh(rockGeo, rockMat, rockInnerMat)
+    rockMesh.scale.setScalar(scale)
+    rockMesh.rotation.set(0, rotY, 0)
+    
+    const allFragments: THREE.Mesh[] = []
+    rockMesh.fracture(options, (fragment) => {
+      // Add world position to fragment
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    setFragments(allFragments)
+    setDestroyed(true)
+  }, [destroyed, x, y, z, scale, rotY])
+  
+  if (destroyed) {
+    return (
+      <FragmentsContainer 
+        fragments={fragments} 
+      />
+    )
+  }
+  
+  return (
+    <mesh 
+      position={[x, y, z]} 
+      scale={scale}
+      rotation={[0, rotY, 0]}
+      castShadow
+      onClick={handleClick}
+    >
+      <dodecahedronGeometry args={[1, 0]} />
+      <meshStandardMaterial 
+        color="#757575" 
+        roughness={0.95}
+        metalness={0.05}
+      />
+    </mesh>
+  )
+}
+
 function Rocks() {
   const rocks = useMemo(() => {
     const rockData = []
@@ -761,20 +1106,14 @@ function Rocks() {
   return (
     <group>
       {rocks.map((rock, i) => (
-        <mesh 
-          key={i} 
-          position={[rock.x, rock.y, rock.z]} 
+        <DestructibleRock 
+          key={i}
+          x={rock.x}
+          y={rock.y}
+          z={rock.z}
           scale={rock.scale}
-          rotation={[0, rock.rotY, 0]}
-          castShadow
-        >
-          <dodecahedronGeometry args={[1, 0]} />
-          <meshStandardMaterial 
-            color="#757575" 
-            roughness={0.95}
-            metalness={0.05}
-          />
-        </mesh>
+          rotY={rock.rotY}
+        />
       ))}
     </group>
   )
