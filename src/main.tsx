@@ -131,7 +131,6 @@ function ridgedNoise(x: number, y: number, octaves: number): number {
 // Generate height map data for terrain with Minecraft-style procedural generation
 function generateHeightData(width: number, depth: number, scale: number) {
   const data = []
-  const noiseScale = 0.015 // Controls terrain feature frequency
   
   for (let i = 0; i < depth; i++) {
     for (let j = 0; j < width; j++) {
@@ -1011,7 +1010,7 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
       const testX = initialX + Math.cos(angle) * distance
       const testZ = initialZ + Math.sin(angle) * distance
       const testHeight = getTerrainHeight(testX, testZ)
-      if (testHeight >= 0 && testHeight <= 3.5) {
+      if (testHeight > 0 && testHeight <= 3.5) {
         targetX = testX
         targetZ = testZ
         break
@@ -1425,135 +1424,6 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
   )
 }
 
-// Cave entrance component - creates dark cave openings in cliff faces and mountains
-function Cave({ x, y, z, rotY, scale }: { x: number, y: number, z: number, rotY: number, scale: number }) {
-  return (
-    <group position={[x, y, z]} rotation={[0, rotY, 0]} scale={scale}>
-      {/* Cave entrance arch - made of rocks */}
-      <mesh position={[0, 3, 0]} castShadow>
-        <torusGeometry args={[3, 1.2, 8, 12, Math.PI]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      
-      {/* Left pillar rocks */}
-      <mesh position={[-2.8, 1.5, 0]} castShadow>
-        <dodecahedronGeometry args={[1.5, 0]} />
-        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
-      </mesh>
-      <mesh position={[-3.2, 3, 0.3]} castShadow>
-        <dodecahedronGeometry args={[1, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      
-      {/* Right pillar rocks */}
-      <mesh position={[2.8, 1.5, 0]} castShadow>
-        <dodecahedronGeometry args={[1.5, 0]} />
-        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
-      </mesh>
-      <mesh position={[3.2, 3, -0.3]} castShadow>
-        <dodecahedronGeometry args={[1, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      
-      {/* Top rocks */}
-      <mesh position={[0, 5.5, 0]} castShadow>
-        <dodecahedronGeometry args={[1.3, 0]} />
-        <meshStandardMaterial color="#3d3d3d" roughness={0.95} />
-      </mesh>
-      <mesh position={[-1.5, 5, 0.2]} castShadow>
-        <dodecahedronGeometry args={[0.9, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      <mesh position={[1.5, 5.2, -0.2]} castShadow>
-        <dodecahedronGeometry args={[0.8, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      
-      {/* Cave interior darkness - deep black plane recessed into cliff */}
-      <mesh position={[0, 2.5, 1]} receiveShadow>
-        <planeGeometry args={[5, 5]} />
-        <meshStandardMaterial color="#0a0a0a" roughness={1} />
-      </mesh>
-      
-      {/* Depth illusion - darker planes going back */}
-      <mesh position={[0, 2.5, 2]}>
-        <planeGeometry args={[4, 4]} />
-        <meshBasicMaterial color="#050505" />
-      </mesh>
-      <mesh position={[0, 2.5, 3]}>
-        <planeGeometry args={[3, 3]} />
-        <meshBasicMaterial color="#020202" />
-      </mesh>
-      
-      {/* Floor rubble */}
-      <mesh position={[-1, 0.3, -0.5]} castShadow>
-        <dodecahedronGeometry args={[0.4, 0]} />
-        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
-      </mesh>
-      <mesh position={[0.8, 0.25, -0.3]} castShadow>
-        <dodecahedronGeometry args={[0.35, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-      <mesh position={[1.5, 0.2, -0.8]} castShadow>
-        <dodecahedronGeometry args={[0.3, 0]} />
-        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
-      </mesh>
-      <mesh position={[-0.5, 0.2, -1]} castShadow>
-        <dodecahedronGeometry args={[0.25, 0]} />
-        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
-      </mesh>
-    </group>
-  )
-}
-
-// Caves placed at cliff faces and mountain bases
-function Caves() {
-  const caveData = useMemo(() => {
-    // Place caves at strategic locations near cliffs and mountains
-    return [
-      // Caves at cliff faces
-      { x: -200, z: 0, rotY: Math.PI * 0.5, scale: 2 }, // First cliff
-      { x: -180, z: 50, rotY: Math.PI * 0.6, scale: 1.5 },
-      { x: 150, z: -100, rotY: -Math.PI * 0.5, scale: 2.2 }, // Second cliff
-      { x: 130, z: -50, rotY: -Math.PI * 0.4, scale: 1.8 },
-      { x: 0, z: 150, rotY: Math.PI, scale: 1.6 }, // Third cliff
-      
-      // Caves at mountain bases
-      { x: -350, z: -300, rotY: Math.PI * 0.3, scale: 2.5 }, // Mountain 1
-      { x: 350, z: -350, rotY: -Math.PI * 0.2, scale: 3 }, // Mountain 2
-      { x: -400, z: 350, rotY: Math.PI * 0.7, scale: 2 }, // Mountain 3
-      { x: 400, z: 300, rotY: -Math.PI * 0.6, scale: 2.8 }, // Mountain 4
-      { x: 0, z: -400, rotY: 0, scale: 2.2 }, // Mountain 5
-      { x: 0, z: 400, rotY: Math.PI, scale: 2.4 }, // Mountain 6
-    ]
-  }, [])
-
-  return (
-    <group>
-      {caveData.map((cave, i) => {
-        // Calculate terrain height at cave position
-        const nx = (cave.x / 1000) + 0.5
-        const nz = (cave.z / 1000) + 0.5
-        let height = 0
-        height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
-        height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
-        height += Math.sin(nx * 3) * 3
-        height += Math.cos(nz * 4) * 2
-        
-        return (
-          <Cave
-            key={i}
-            x={cave.x}
-            y={Math.max(height, 0)} // Place at terrain height or water level
-            z={cave.z}
-            rotY={cave.rotY}
-            scale={cave.scale}
-          />
-        )
-      })}
-    </group>
-  )
-}
 
 function Rocks() {
   const rocks = useMemo(() => {
