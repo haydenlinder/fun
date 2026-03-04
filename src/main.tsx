@@ -292,6 +292,9 @@ const GrassShaderMaterial = shaderMaterial(
     uTime: 0,
     uWindStrength: 0.12,
     uWindSpeed: 1.0,
+    fogColor: new THREE.Color('#81abb7'),
+    fogNear: 1,
+    fogFar: 50,
   },
   // Vertex Shader - dramatic bending and movement
   `
@@ -395,6 +398,10 @@ const GrassShaderMaterial = shaderMaterial(
   `,
   // Fragment Shader - high contrast with bright sunlit tips
   `
+    uniform vec3 fogColor;
+    uniform float fogNear;
+    uniform float fogFar;
+    
     varying vec3 vColor;
     varying vec3 vNormal;
     varying float vHeight;
@@ -449,17 +456,22 @@ const GrassShaderMaterial = shaderMaterial(
       vec3 shadowColor = vColor * vec3(0.6, 0.7, 0.9) * 0.12;
       color += shadowColor * (1.0 - vAO);
       
-      // Atmospheric perspective
-      float dist = length(vWorldPos - cameraPosition);
-      float fog = smoothstep(25.0, 100.0, dist);
-      vec3 fogColor = vec3(0.55, 0.65, 0.55);
-      color = mix(color, fogColor, fog * 0.35);
       
       // Slight saturation boost
       float luminance = dot(color, vec3(0.299, 0.587, 0.114));
       color = mix(vec3(luminance), color, 1.15);
       
-      gl_FragColor = vec4(color, 1.0);
+      // Apply fog - linear fog based on distance from camera
+      float fogDistance = length(vWorldPos - cameraPosition);
+      float fogFactor = smoothstep(fogNear, fogFar, fogDistance);
+      color = mix(color, fogColor, fogFactor);
+      
+      // Fade out grass completely at distance so terrain shows through
+      float alpha = 1.0 - smoothstep(fogFar * 0.6, fogFar * 0.9, fogDistance);
+      
+      if (alpha < 0.01) discard;
+      
+      gl_FragColor = vec4(color, alpha);
     }
   `
 )
@@ -484,7 +496,7 @@ function Grass() {
   const bladeGeo = useMemo(() => {
     const bladeWidth = 0.015  // Thin blades
     const bladeHeight = 0.4
-    const segments = 3
+    const segments = 5
     
     const vertices: number[] = []
     
@@ -549,20 +561,28 @@ function Grass() {
     
     // HIGH DENSITY - dense carpet of grass (~3M+ blades)
     worker.postMessage({
-      fieldSize: 180,
-      baseDensity: 2000000,   // Dense base layer
-      mediumDensity: 800000,  // Medium grass
-      tallDensity: 350000,    // Tall grass
-      clusterCount: 6000      // Accent clusters
+      fieldSize: 200,
+      baseDensity: 2000,   // Dense base layer
+      mediumDensity: 1000,  // Medium grass
+      tallDensity: 1000,    // Tall grass
+      clusterCount: 300000      // Accent clusters
     })
     
     return () => worker.terminate()
   }, [bladeGeo])
   
-  // Update time uniform each frame
+  // Update time uniform and sync fog each frame
   useFrame((state) => {
     if (materialRef.current) {
       materialRef.current.uTime = state.clock.elapsedTime
+      
+      // Sync fog with scene fog
+      const fog = state.scene.fog as THREE.Fog | null
+      if (fog) {
+        materialRef.current.fogColor = fog.color
+        materialRef.current.fogNear = fog.near
+        materialRef.current.fogFar = fog.far
+      }
     }
   })
   
@@ -573,7 +593,8 @@ function Grass() {
       <grassShaderMaterial 
         ref={materialRef}
         side={THREE.DoubleSide}
-        transparent={false}
+        transparent={true}
+        depthWrite={true}
       />
     </mesh>
   )
@@ -1477,7 +1498,7 @@ function Scene() {
       
       {/* Sky */}
       <Sky 
-        distance={450000}
+        distance={200}
         sunPosition={[100, 20, 100]}
         inclination={0.6}
         azimuth={0.25}
@@ -1488,7 +1509,7 @@ function Scene() {
       />
       
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['#87CEEB', 50, 200]} />
+      <fog attach="fog" args={['#81abb7', 1, 100]} />
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
@@ -1526,7 +1547,7 @@ function Scene() {
 createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [30, 20, 50], fov: 60, near: 0.1, far: 1000 }}
+    camera={{ position: [30, 20, 50], fov: 60, near: 0.1, far: 125 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
