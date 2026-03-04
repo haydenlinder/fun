@@ -837,8 +837,39 @@ function LaserSystem() {
   const lastFireTime = useRef(0)
   const raycaster = useMemo(() => new THREE.Raycaster(), [])
   
+  // Track mouse movement to distinguish clicks from drags (OrbitControls)
+  const mouseDownPos = useRef<{ x: number, y: number } | null>(null)
+  const isDragging = useRef(false)
+  
   useEffect(() => {
+    const handleMouseDown = (event: MouseEvent) => {
+      mouseDownPos.current = { x: event.clientX, y: event.clientY }
+      isDragging.current = false
+    }
+    
+    const handleMouseMove = (event: MouseEvent) => {
+      if (mouseDownPos.current) {
+        const dx = event.clientX - mouseDownPos.current.x
+        const dy = event.clientY - mouseDownPos.current.y
+        const distance = Math.sqrt(dx * dx + dy * dy)
+        // If mouse moved more than 5 pixels, consider it a drag
+        if (distance > 5) {
+          isDragging.current = true
+        }
+      }
+    }
+    
+    const handleMouseUp = () => {
+      mouseDownPos.current = null
+    }
+    
     const handleClick = (event: MouseEvent) => {
+      // Don't fire if user was dragging (using OrbitControls)
+      if (isDragging.current) {
+        isDragging.current = false
+        return
+      }
+      
       // Debounce - prevent double firing within 50ms
       const now = performance.now()
       if (now - lastFireTime.current < 50) return
@@ -891,8 +922,16 @@ function LaserSystem() {
       }
     }
     
+    gl.domElement.addEventListener('mousedown', handleMouseDown)
+    gl.domElement.addEventListener('mousemove', handleMouseMove)
+    gl.domElement.addEventListener('mouseup', handleMouseUp)
     gl.domElement.addEventListener('click', handleClick)
-    return () => gl.domElement.removeEventListener('click', handleClick)
+    return () => {
+      gl.domElement.removeEventListener('mousedown', handleMouseDown)
+      gl.domElement.removeEventListener('mousemove', handleMouseMove)
+      gl.domElement.removeEventListener('mouseup', handleMouseUp)
+      gl.domElement.removeEventListener('click', handleClick)
+    }
   }, [camera, scene, gl, raycaster])
   
   return (
