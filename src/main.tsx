@@ -142,36 +142,36 @@ function generateHeightData(width: number, depth: number, scale: number) {
       const x = nx * 8 // Gives us 8 "tiles" of noise across terrain
       const z = nz * 8
       
-      // Base terrain - gentle rolling hills (multiple octaves of noise)
-      let height = fbm(x, z, 6, 2, 0.5) * 8
+      // Base terrain - rolling hills (multiple octaves of noise)
+      let height = fbm(x, z, 6, 2, 0.5) * 30
       
-      // Continental/biome-scale variation
+      // Continental/biome-scale variation - creates large elevation differences
       const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
       
-      // Mountains - use ridged noise for dramatic peaks
+      // MASSIVE Mountains - use ridged noise for dramatic towering peaks
       const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
       const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
-      const mountainHeight = mountainNoise * mountainMask * 45
+      const mountainHeight = mountainNoise * mountainMask * 200
       
-      // Cliffs - create steep areas using derivative of noise
+      // Steep cliffs - create dramatic vertical drops
       const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
-      const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 100
-      const cliffContribution = Math.min(cliffiness * 2, 15) * Math.max(0, cliffNoise + 0.2)
+      const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 150
+      const cliffContribution = Math.min(cliffiness * 3, 60) * Math.max(0, cliffNoise + 0.2)
       
-      // Valley carving - negative contribution in some areas
+      // Deep valley carving - creates dramatic canyons and gorges
       const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
-      const valleyDepth = Math.max(0, -valleyNoise - 0.2) * 20
+      const valleyDepth = Math.max(0, -valleyNoise - 0.1) * 100
       
-      // Plateaus - flat elevated areas
+      // Plateaus - elevated flat areas
       const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
       const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
-      const plateauHeight = plateauMask > 0.1 ? plateauMask * 12 : 0
+      const plateauHeight = plateauMask > 0.1 ? plateauMask * 50 : 0
       
-      // Small detail noise for rocky texture
-      const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 1.5
+      // Detail noise for rocky texture
+      const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 5
       
       // Combine all features
-      height += continentalNoise * 5
+      height += continentalNoise * 25
       height += mountainHeight
       height += cliffContribution
       height -= valleyDepth
@@ -224,43 +224,53 @@ function Terrain() {
       const height = positions[i * 3 + 1]
       
       let r, g, b
-      if (height < -2) {
+      if (height < -30) {
+        // Extremely deep valleys - dark muddy brown
+        r = 0.2
+        g = 0.22
+        b = 0.15
+      } else if (height < -15) {
+        // Very deep valleys - dark sandy brown
+        r = 0.25
+        g = 0.28
+        b = 0.18
+      } else if (height < -5) {
         // Deep valleys - darker green/brown
         r = 0.2
         g = 0.35
         b = 0.15
-      } else if (height < 0) {
+      } else if (height < 5) {
         // Low areas - grass green
         r = 0.3
         g = 0.5
         b = 0.2
-      } else if (height < 3) {
+      } else if (height < 15) {
         // Mid elevation - lighter green
         r = 0.4
         g = 0.6
         b = 0.25
-      } else if (height < 8) {
+      } else if (height < 30) {
         // Higher areas - brownish (cliff/hill tops)
         r = 0.5
         g = 0.45
         b = 0.3
-      } else if (height < 15) {
+      } else if (height < 60) {
         // Mountain slopes - rocky gray
         r = 0.55
         g = 0.5
         b = 0.45
-      } else if (height < 25) {
+      } else if (height < 100) {
         // High mountain - darker rocky
         r = 0.45
         g = 0.42
         b = 0.4
-      } else if (height < 35) {
+      } else if (height < 140) {
         // Near peak - lighter rocky with hints of snow
         r = 0.65
         g = 0.63
         b = 0.62
       } else {
-        // Snow caps - white/light gray
+        // Snow caps - white/light gray (above 140)
         r = 0.9
         g = 0.92
         b = 0.95
@@ -297,7 +307,7 @@ function Terrain() {
 function Water() {
   
   return (
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]} receiveShadow>
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
       <planeGeometry args={[1000, 1000]} />
       <meshStandardMaterial 
         color="#1a5276"
@@ -424,8 +434,8 @@ function Trees() {
       const z = (rng() - 0.5) * 900
       const height = getTerrainHeight(x, z)
       
-      // Only place trees in grassy areas (not underwater, not on mountains)
-      if (height > 0 && height < 12) {
+      // Only place trees in grassy areas (not underwater, not on high mountains)
+      if (height > 0 && height < 50) {
         treeData.push({ x, y: height, z, scale: 0.5 + rng() * 2 })
       }
     }
@@ -931,36 +941,36 @@ function getTerrainHeight(worldX: number, worldZ: number): number {
   const x = nx * 8  // Same scaling as generateHeightData
   const z = nz * 8
   
-  // Base terrain - gentle rolling hills (multiple octaves of noise)
-  let height = fbm(x, z, 6, 2, 0.5) * 8
+  // Base terrain - rolling hills (multiple octaves of noise)
+  let height = fbm(x, z, 6, 2, 0.5) * 30
   
-  // Continental/biome-scale variation
+  // Continental/biome-scale variation - creates large elevation differences
   const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
   
-  // Mountains - use ridged noise for dramatic peaks
+  // MASSIVE Mountains - use ridged noise for dramatic towering peaks
   const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
   const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
-  const mountainHeight = mountainNoise * mountainMask * 45
+  const mountainHeight = mountainNoise * mountainMask * 200
   
-  // Cliffs - create steep areas using derivative of noise
+  // Steep cliffs - create dramatic vertical drops
   const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
-  const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 100
-  const cliffContribution = Math.min(cliffiness * 2, 15) * Math.max(0, cliffNoise + 0.2)
+  const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 150
+  const cliffContribution = Math.min(cliffiness * 3, 60) * Math.max(0, cliffNoise + 0.2)
   
-  // Valley carving - negative contribution in some areas
+  // Deep valley carving - creates dramatic canyons and gorges
   const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
-  const valleyDepth = Math.max(0, -valleyNoise - 0.2) * 20
+  const valleyDepth = Math.max(0, -valleyNoise - 0.1) * 100
   
-  // Plateaus - flat elevated areas
+  // Plateaus - elevated flat areas
   const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
   const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
-  const plateauHeight = plateauMask > 0.1 ? plateauMask * 12 : 0
+  const plateauHeight = plateauMask > 0.1 ? plateauMask * 50 : 0
   
-  // Small detail noise for rocky texture
-  const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 1.5
+  // Detail noise for rocky texture
+  const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 5
   
   // Combine all features
-  height += continentalNoise * 5
+  height += continentalNoise * 25
   height += mountainHeight
   height += cliffContribution
   height -= valleyDepth
@@ -1555,7 +1565,7 @@ function Rocks() {
       const height = getTerrainHeight(x, z)
       
       // Place rocks everywhere except deep underwater
-      if (height > -2) {
+      if (height > 0 && height < 75) {
         // More rocks on mountain slopes and cliffs
         const isHighAltitude = height > 10
         const scale = isHighAltitude 
@@ -1655,12 +1665,12 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 1500 }}
+    camera={{ position: [0, 20, 200], fov: 60, near: 0.1, far: 1500 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
       <Scene />
-      <fog attach="fog" args={['white']}/>
+      {/* <fog attach="fog" args={['white']}/> */}
     </Physics>
   </Canvas>,
 )
