@@ -428,7 +428,7 @@ function Trees() {
   const trees = useMemo(() => {
     const treeData = []
     const rng = seededRandom(54321) // Use seeded random for consistent tree placement
-    for (let i = 0; i < 1500; i++) {
+    for (let i = 0; i < 2000; i++) {
       const x = (rng() - 0.5) * 900
       const z = (rng() - 0.5) * 900
       const height = getTerrainHeight(x, z)
@@ -1594,17 +1594,17 @@ function Scene() {
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
       <directionalLight 
-        position={[100, 100, 100]} 
+        position={[200, 300, 200]} 
         intensity={1.5}
         color="#FFF8DC"
         castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-        shadow-camera-far={300}
-        shadow-camera-left={-100}
-        shadow-camera-right={100}
-        shadow-camera-top={100}
-        shadow-camera-bottom={-100}
+        shadow-mapSize-width={4096}
+        shadow-mapSize-height={4096}
+        shadow-camera-far={1000}
+        shadow-camera-left={-500}
+        shadow-camera-right={500}
+        shadow-camera-top={500}
+        shadow-camera-bottom={-500}
       />
       <hemisphereLight 
         args={['#87CEEB', '#3d5c3d', 0.6]} 
