@@ -1425,6 +1425,98 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
 }
 
 
+// Single cloud made of multiple spheres for a fluffy look
+function Cloud({ initialX, initialY, initialZ, scale, speed }: { 
+  initialX: number
+  initialY: number
+  initialZ: number
+  scale: number
+  speed: number 
+}) {
+  const groupRef = useRef<THREE.Group>(null!)
+  
+  // Generate random puffs for this cloud
+  const puffs = useMemo(() => {
+    const rng = seededRandom(Math.floor(initialX * 1000 + initialZ * 100))
+    const numPuffs = 5 + Math.floor(rng() * 8)
+    const puffData = []
+    
+    for (let i = 0; i < numPuffs; i++) {
+      puffData.push({
+        x: (rng() - 0.5) * 200 * scale,
+        y: (rng() - 0.5) * 10 * scale,
+        z: (rng() - 0.5) * 200 * scale,
+        radius: (8 + rng() * 15) * scale,
+      })
+    }
+    return puffData
+  }, [initialX, initialZ, scale])
+  
+  useFrame((_, delta) => {
+    if (!groupRef.current) return
+    
+    // Move cloud along X axis
+    groupRef.current.position.x += speed * delta
+    
+    // Wrap around when cloud goes too far
+    if (groupRef.current.position.x > 700) {
+      groupRef.current.position.x = -700
+    }
+  })
+  
+  return (
+    <group ref={groupRef} position={[initialX, initialY, initialZ]}>
+      {puffs.map((puff, i) => (
+        <mesh castShadow key={i} position={[puff.x, puff.y, puff.z]}>
+          <sphereGeometry args={[puff.radius, 12, 10]} />
+          <meshStandardMaterial 
+            color="#ffffff"
+            roughness={1}
+            metalness={0}
+            transparent
+            opacity={0.9}
+          />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+// Clouds system - multiple clouds drifting across the sky
+function Clouds() {
+  const cloudsData = useMemo(() => {
+    const data = []
+    const rng = seededRandom(77777)
+    
+    // Create clouds spread across the sky
+    for (let i = 0; i < 500; i++) {
+      data.push({
+        x: (rng() - 0.5) * 1400,
+        y: 150, // Height at 100
+        z: (rng() - 0.5) * 1000,
+        scale: 0.6 + rng() * 0.8,
+        speed: 3 + rng() * 8, // Drift speed
+      })
+    }
+    return data
+  }, [])
+  
+  return (
+    <group>
+      {cloudsData.map((cloud, i) => (
+        <Cloud
+          key={i}
+          initialX={cloud.x}
+          initialY={cloud.y}
+          initialZ={cloud.z}
+          scale={cloud.scale}
+          speed={cloud.speed}
+        />
+      ))}
+    </group>
+  )
+}
+
 function Rocks() {
   const rocks = useMemo(() => {
     const rockData = []
@@ -1480,7 +1572,7 @@ function Scene() {
         // enableDamping
         // dampingFactor={0.05}
         minDistance={50}
-        maxDistance={1000}
+        maxDistance={1500}
         // maxPolarAngle={Math.PI / 2 - 0.1}
       />
       
@@ -1497,12 +1589,12 @@ function Scene() {
       />
       
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['#81abb7']} />
+      <fog attach="fog" args={['white', 10, 1000]} />
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
       <directionalLight 
-        position={[100, 50, 100]} 
+        position={[100, 100, 100]} 
         intensity={1.5}
         color="#FFF8DC"
         castShadow
@@ -1524,6 +1616,7 @@ function Scene() {
       <Trees />
       <Rocks />
       <Sheep />
+      <Clouds />
       
       {/* Laser System */}
       <LaserSystem />
@@ -1535,12 +1628,12 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [300, 100, 250], fov: 60, near: 0.1, far: 1500 }}
+    camera={{ position: [300, 100, 250], fov: 60, near: 0.1, far: 2000 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
       <Scene />
-      {/* <fog attach="fog" args={['white']}/> */}
+
     </Physics>
   </Canvas>,
 )
