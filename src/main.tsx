@@ -756,16 +756,25 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
       <mesh ref={glowRef}>
         <cylinderGeometry args={[0.15, 0.15, length, 8]} />
         <meshBasicMaterial 
-          color="#ffcd44" 
+          color="#ffb444" 
           transparent 
           opacity={opacity * 0.4}
         />
       </mesh>
       {/* Impact point glow */}
-      <mesh position={[0, -length / 2, 0]}>
-        <sphereGeometry args={[0.3, 16, 16]} />
+      <mesh position={[0, length / 2, 0]}>
+        <sphereGeometry args={[1, 16, 16]} />
         <meshBasicMaterial 
-          color="#ffaa00" 
+          color="#ff6a00" 
+          transparent 
+          opacity={opacity * 0.8}
+        />
+      </mesh>
+      {/* Origin point glow */}
+      <mesh position={[0, -length / 2, 0]}>
+        <sphereGeometry args={[.2, 16, 16]} />
+        <meshBasicMaterial 
+          color="#ffe600" 
           transparent 
           opacity={opacity * 0.8}
         />
@@ -779,10 +788,16 @@ function LaserSystem() {
   const { camera, scene, gl, viewport } = useThree()
   const [lasers, setLasers] = useState<LaserData[]>([])
   const nextLaserId = useRef(0)
+  const lastFireTime = useRef(0)
   const raycaster = useMemo(() => new THREE.Raycaster(), [])
   
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
+      // Debounce - prevent double firing within 50ms
+      const now = performance.now()
+      if (now - lastFireTime.current < 50) return
+      lastFireTime.current = now
+      
       // Convert mouse position to normalized device coordinates
       const rect = gl.domElement.getBoundingClientRect()
       const mouse = new THREE.Vector2(
@@ -823,7 +838,7 @@ function LaserSystem() {
         // Remove laser after animation completes
         setTimeout(() => {
           setLasers(prev => prev.filter(l => l.id !== newLaser.id))
-        }, 300)
+        }, 500)
       }
     }
     
