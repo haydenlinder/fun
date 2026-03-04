@@ -1,8 +1,11 @@
 import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useMemo, useEffect, useState } from 'react'
 import { Canvas, useFrame, extend } from '@react-three/fiber'
-import { OrbitControls, Sky, Environment, shaderMaterial } from '@react-three/drei'
+import { OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
+
+// Import web worker for grass generation
+import GrassWorker from './grassWorker?worker'
 
 // Generate height map data for terrain
 function generateHeightData(width: number, depth: number, scale: number) {
@@ -189,17 +192,18 @@ function Trees() {
 const GrassShaderMaterial = shaderMaterial(
   {
     uTime: 0,
-    uWindStrength: 0.15,
-    uWindSpeed: 1.2,
+    uWindStrength: 0.12,
+    uWindSpeed: 1.0,
   },
-  // Vertex Shader - runs on GPU for each vertex of each instance
+  // Vertex Shader - dramatic bending and movement
   `
-    // Per-instance attributes (stored on GPU, no CPU updates needed)
     attribute vec3 instancePosition;
     attribute vec3 instanceColor;
     attribute float instanceRotation;
     attribute float instanceScale;
     attribute float instancePhase;
+    attribute float instanceBend;
+    attribute float instanceTilt;
     
     uniform float uTime;
     uniform float uWindStrength;
@@ -208,66 +212,156 @@ const GrassShaderMaterial = shaderMaterial(
     varying vec3 vColor;
     varying vec3 vNormal;
     varying float vHeight;
+    varying vec3 vWorldPos;
+    varying float vAO;
+    varying float vSunExposure;
     
-    // Rotation matrix around Y axis
     mat3 rotateY(float angle) {
       float c = cos(angle);
       float s = sin(angle);
-      return mat3(
-        c, 0.0, s,
-        0.0, 1.0, 0.0,
-        -s, 0.0, c
-      );
+      return mat3(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
     }
     
     void main() {
+      // Normalize height for shader calculations (0 to 1)
+      float normalizedHeight = position.y / 0.4;
+      vHeight = normalizedHeight;
       vColor = instanceColor;
-      vHeight = position.y; // Local Y position (0 at base, higher at tip)
       
-      // Wind calculation - entirely on GPU
-      float windWave = sin(uTime * uWindSpeed + instancePosition.x * 0.15 + instancePosition.z * 0.15 + instancePhase);
-      float windWave2 = cos(uTime * uWindSpeed * 0.6 + instancePosition.x * 0.08 - instancePosition.z * 0.1);
+      // Multi-layered wind with more movement
+      float windTime = uTime * uWindSpeed;
+      float wx = instancePosition.x * 0.04 + instancePosition.z * 0.025;
       
-      // Sway increases with height (tip moves more than base)
-      float swayFactor = position.y * instanceScale * 0.5;
-      float swayX = windWave * uWindStrength * swayFactor;
-      float swayZ = windWave2 * uWindStrength * 0.5 * swayFactor;
+      // Primary wind wave - strong and sweeping
+      float wind1 = sin(windTime * 0.7 + wx + instancePhase) * 0.7;
+      // Secondary turbulence
+      float wind2 = sin(windTime * 1.5 + wx * 1.8 + instancePhase * 0.6) * 0.35;
+      // High frequency flutter
+      float wind3 = sin(windTime * 2.5 + wx * 3.0 + instancePhase * 1.5) * 0.15;
+      // Cross-wind
+      float crossWind = cos(windTime * 0.9 + instancePosition.z * 0.06) * 0.4;
       
-      // Apply rotation, scale, and wind sway
+      float totalWind = wind1 + wind2 + wind3;
+      
+      // Height-cubed for more dramatic top bending
+      float bendInfluence = normalizedHeight * normalizedHeight * normalizedHeight;
+      float bendInfluence2 = normalizedHeight * normalizedHeight;
+      
       vec3 pos = position;
-      pos.y *= instanceScale; // Scale height
-      pos = rotateY(instanceRotation) * pos; // Rotate around Y
       
-      // Add wind displacement (more at top of blade)
-      pos.x += swayX;
-      pos.z += swayZ;
+      // Scale blade - keep thin, only slight width variation
+      pos.y *= instanceScale;
+      pos.x *= (0.9 + instanceScale * 0.2);  // Much less width scaling
       
-      // Add instance position
+      // Apply rotation
+      pos = rotateY(instanceRotation) * pos;
+      
+      // DRAMATIC natural droop/tilt - blades lean significantly
+      float tiltAmount = instanceTilt * bendInfluence * 0.25;
+      pos.x += tiltAmount;
+      
+      // DRAMATIC pre-bend curve - natural arch
+      float preBend = instanceBend * bendInfluence * 0.18;
+      pos.z += preBend;
+      
+      // Additional quadratic bend for curved shape
+      float curveBend = bendInfluence2 * 0.08 * instanceScale;
+      pos.z += curveBend;
+      
+      // Wind sway - more dramatic
+      float windSway = totalWind * uWindStrength * bendInfluence * instanceScale;
+      float crossSway = crossWind * uWindStrength * 0.5 * bendInfluence * instanceScale;
+      pos.x += windSway;
+      pos.z += crossSway;
+      
+      // Compensate height when bending significantly
+      float totalBend = abs(windSway) + abs(tiltAmount) + abs(preBend) + abs(crossSway);
+      pos.y *= 1.0 - totalBend * 0.12;
+      
       pos += instancePosition;
       
-      // Transform normal
+      vWorldPos = pos;
+      
+      // Stronger AO at base
+      vAO = pow(normalizedHeight, 0.7) * 0.7 + 0.3;
+      
+      // Calculate sun exposure based on blade orientation
+      vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
+      float bendDir = atan(tiltAmount + windSway, pos.y - instancePosition.y);
+      vSunExposure = max(0.0, sin(bendDir + 0.5)) * normalizedHeight;
+      
       vNormal = normalize(normalMatrix * rotateY(instanceRotation) * normal);
       
       gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
     }
   `,
-  // Fragment Shader - runs on GPU for each pixel
+  // Fragment Shader - high contrast with bright sunlit tips
   `
     varying vec3 vColor;
     varying vec3 vNormal;
     varying float vHeight;
+    varying vec3 vWorldPos;
+    varying float vAO;
+    varying float vSunExposure;
     
     void main() {
-      // Simple lighting
-      vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
-      float diff = max(dot(vNormal, lightDir), 0.0) * 0.5 + 0.5;
+      vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
+      vec3 viewDir = normalize(cameraPosition - vWorldPos);
+      vec3 normal = normalize(vNormal);
       
-      // Darken base, lighten tips
-      float heightGradient = 0.7 + vHeight * 2.0;
+      // Strong wrapped diffuse
+      float NdotL = dot(normal, lightDir);
+      float diffuse = NdotL * 0.45 + 0.55;
       
-      vec3 finalColor = vColor * diff * heightGradient;
+      // Enhanced subsurface scattering
+      float scatter = pow(clamp(-NdotL * 0.6 + 0.5, 0.0, 1.0), 1.8) * 0.5;
+      vec3 scatterColor = vec3(0.5, 0.75, 0.25); // Bright lime transmission
       
-      gl_FragColor = vec4(finalColor, 1.0);
+      // Rim lighting
+      float rim = pow(1.0 - max(0.0, dot(viewDir, normal)), 2.5) * 0.2;
+      
+      // DARK base, BRIGHT tips - strong contrast
+      float heightContrast = pow(vHeight, 0.8);
+      vec3 darkBase = vColor * 0.25; // Very dark at ground
+      vec3 brightTip = vColor * 1.4; // Overbright at tips
+      vec3 baseColor = mix(darkBase, brightTip, heightContrast);
+      
+      // Golden sunlit tips
+      vec3 sunTint = vec3(0.18, 0.15, -0.05) * vHeight * vHeight;
+      baseColor += sunTint;
+      
+      // Extra brightness for sun-exposed blades
+      baseColor += vec3(0.08, 0.1, 0.02) * vSunExposure;
+      
+      // Combine lighting with strong AO
+      vec3 color = baseColor * diffuse * vAO;
+      
+      // Add scattering (lime glow when backlit)
+      color += scatterColor * scatter * vHeight * 0.8;
+      
+      // Rim highlight (bright edges)
+      color += vec3(0.95, 1.0, 0.7) * rim * vHeight;
+      
+      // Subtle specular for wet/dewy look
+      vec3 halfDir = normalize(lightDir + viewDir);
+      float spec = pow(max(0.0, dot(normal, halfDir)), 48.0) * 0.12;
+      color += vec3(1.0, 1.0, 0.9) * spec * vHeight;
+      
+      // Cool shadow ambient
+      vec3 shadowColor = vColor * vec3(0.6, 0.7, 0.9) * 0.12;
+      color += shadowColor * (1.0 - vAO);
+      
+      // Atmospheric perspective
+      float dist = length(vWorldPos - cameraPosition);
+      float fog = smoothstep(25.0, 100.0, dist);
+      vec3 fogColor = vec3(0.55, 0.65, 0.55);
+      color = mix(color, fogColor, fog * 0.35);
+      
+      // Slight saturation boost
+      float luminance = dot(color, vec3(0.299, 0.587, 0.114));
+      color = mix(vec3(luminance), color, 1.15);
+      
+      gl_FragColor = vec4(color, 1.0);
     }
   `
 )
@@ -285,92 +379,96 @@ declare module '@react-three/fiber' {
 function Grass() {
   const meshRef = useRef<THREE.Mesh>(null!)
   const materialRef = useRef<any>(null!)
+  const [geometry, setGeometry] = useState<THREE.InstancedBufferGeometry | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
   
-  // Create instanced geometry with all data as GPU attributes
-  const geometry = useMemo(() => {
-    // Base blade geometry
-    const vertices = new Float32Array([
-      -0.02, 0, 0,  0.02, 0, 0,  0.015, 0.08, 0.01,
-      -0.02, 0, 0,  0.015, 0.08, 0.01,  -0.015, 0.08, 0.01,
-      -0.015, 0.08, 0.01,  0.015, 0.08, 0.01,  0.01, 0.16, 0.02,
-      -0.015, 0.08, 0.01,  0.01, 0.16, 0.02,  -0.01, 0.16, 0.02,
-      -0.01, 0.16, 0.02,  0.01, 0.16, 0.02,  0.005, 0.22, 0.03,
-      -0.01, 0.16, 0.02,  0.005, 0.22, 0.03,  -0.005, 0.22, 0.03,
-      -0.005, 0.22, 0.03,  0.005, 0.22, 0.03,  0, 0.28, 0.04,
-    ])
+  // Create base blade geometry (small, runs on main thread)
+  const bladeGeo = useMemo(() => {
+    const bladeWidth = 0.015  // Thin blades
+    const bladeHeight = 0.4
+    const segments = 3
     
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
-    geo.computeVertexNormals()
+    const vertices: number[] = []
     
-    // Generate grass instance data
-    const positions: number[] = []
-    const colors: number[] = []
-    const rotations: number[] = []
-    const scales: number[] = []
-    const phases: number[] = []
-    
-    const clusterCount = 500000  // 500k grass blades - GPU handles this easily!
-    
-    for (let c = 0; c < clusterCount; c++) {
-      const clusterX = (Math.random() - 0.5) * 180
-      const clusterZ = (Math.random() - 0.5) * 180
+    for (let i = 0; i < segments; i++) {
+      const t1 = i / segments
+      const t2 = (i + 1) / segments
       
-      const nx = (clusterX / 200) + 0.5
-      const nz = (clusterZ / 200) + 0.5
-      let height = 0
-      height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
-      height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
-      height += Math.sin(nx * 30) * Math.cos(nz * 25) * 0.5
-      height += Math.sin(nx * 50 + 2) * Math.cos(nz * 45 + 1) * 0.25
-      height += Math.sin(nx * 3) * 3
-      height += Math.cos(nz * 4) * 2
+      const w1 = bladeWidth * (1 - t1 * 0.9)
+      const w2 = bladeWidth * (1 - t2 * 0.9)
       
-      if (height > -1.5 && height < 4) {
-        positions.push(clusterX, height, clusterZ)
-        rotations.push(Math.random() * Math.PI * 2)
-        scales.push(1.2 + Math.random() * 2.0)
-        phases.push(Math.random() * Math.PI * 2)
-        
-        // Color variation
-        const shade = Math.random()
-        if (shade < 0.3) {
-          colors.push(0.1 + Math.random() * 0.1, 0.3 + Math.random() * 0.15, 0.05 + Math.random() * 0.05)
-        } else if (shade < 0.7) {
-          colors.push(0.15 + Math.random() * 0.1, 0.4 + Math.random() * 0.2, 0.1 + Math.random() * 0.08)
-        } else {
-          colors.push(0.3 + Math.random() * 0.15, 0.5 + Math.random() * 0.2, 0.1 + Math.random() * 0.1)
-        }
-      }
+      const y1 = t1 * bladeHeight
+      const y2 = t2 * bladeHeight
+      
+      const curve1 = t1 * t1 * 0.04
+      const curve2 = t2 * t2 * 0.04
+      
+      vertices.push(
+        -w1, y1, curve1,
+        w1, y1, curve1,
+        w2, y2, curve2,
+        -w1, y1, curve1,
+        w2, y2, curve2,
+        -w2, y2, curve2
+      )
     }
     
-    const instanceCount = positions.length / 3
-    console.log(`GPU Grass: ${instanceCount} blades`)
-    
-    // Create instanced buffer geometry
-    const instancedGeo = new THREE.InstancedBufferGeometry()
-    instancedGeo.index = geo.index
-    instancedGeo.setAttribute('position', geo.getAttribute('position'))
-    instancedGeo.setAttribute('normal', geo.getAttribute('normal'))
-    
-    // Add per-instance attributes (these stay on GPU, never updated by CPU)
-    instancedGeo.setAttribute('instancePosition', new THREE.InstancedBufferAttribute(new Float32Array(positions), 3))
-    instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(new Float32Array(colors), 3))
-    instancedGeo.setAttribute('instanceRotation', new THREE.InstancedBufferAttribute(new Float32Array(rotations), 1))
-    instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(new Float32Array(scales), 1))
-    instancedGeo.setAttribute('instancePhase', new THREE.InstancedBufferAttribute(new Float32Array(phases), 1))
-    
-    instancedGeo.instanceCount = instanceCount
-    
-    return instancedGeo
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3))
+    geo.computeVertexNormals()
+    return geo
   }, [])
   
-  // Only update time uniform each frame - single value, not 100k matrices!
+  // Use web worker to generate grass data off main thread
+  useEffect(() => {
+    const worker = new GrassWorker()
+    
+    worker.onmessage = (e) => {
+      const { positions, colors, rotations, scales, phases, bends, tilts, instanceCount } = e.data
+      
+      console.log(`GPU Grass (Worker): ${instanceCount.toLocaleString()} blades`)
+      
+      // Create instanced geometry with worker data
+      const instancedGeo = new THREE.InstancedBufferGeometry()
+      instancedGeo.index = bladeGeo.index
+      instancedGeo.setAttribute('position', bladeGeo.getAttribute('position'))
+      instancedGeo.setAttribute('normal', bladeGeo.getAttribute('normal'))
+      
+      instancedGeo.setAttribute('instancePosition', new THREE.InstancedBufferAttribute(positions, 3))
+      instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(colors, 3))
+      instancedGeo.setAttribute('instanceRotation', new THREE.InstancedBufferAttribute(rotations, 1))
+      instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(scales, 1))
+      instancedGeo.setAttribute('instancePhase', new THREE.InstancedBufferAttribute(phases, 1))
+      instancedGeo.setAttribute('instanceBend', new THREE.InstancedBufferAttribute(bends, 1))
+      instancedGeo.setAttribute('instanceTilt', new THREE.InstancedBufferAttribute(tilts, 1))
+      
+      instancedGeo.instanceCount = instanceCount
+      
+      setGeometry(instancedGeo)
+      setIsLoading(false)
+      worker.terminate()
+    }
+    
+    // HIGH DENSITY - dense carpet of grass (~3M+ blades)
+    worker.postMessage({
+      fieldSize: 180,
+      baseDensity: 2000000,   // Dense base layer
+      mediumDensity: 800000,  // Medium grass
+      tallDensity: 350000,    // Tall grass
+      clusterCount: 6000      // Accent clusters
+    })
+    
+    return () => worker.terminate()
+  }, [bladeGeo])
+  
+  // Update time uniform each frame
   useFrame((state) => {
     if (materialRef.current) {
       materialRef.current.uTime = state.clock.elapsedTime
     }
   })
+  
+  if (!geometry) return null
   
   return (
     <mesh ref={meshRef} geometry={geometry} frustumCulled={false}>
