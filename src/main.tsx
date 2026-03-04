@@ -1497,7 +1497,7 @@ function Scene() {
       />
       
       {/* Fog for atmosphere */}
-      {/* <fog attach="fog" args={['#81abb7', 1, 100]} /> */}
+      <fog attach="fog" args={['#81abb7']} />
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
