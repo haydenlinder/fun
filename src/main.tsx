@@ -1251,7 +1251,10 @@ function Scene() {
       {/* Camera Controls */}
       <MapControls 
       makeDefault
-
+    // minPolarAngle={0}
+    maxPolarAngle={1.55}
+    // minAzimuthAngle={0}
+    // maxAzimuthAngle={0}
         // enableDamping
         // dampingFactor={0.05}
         minDistance={0}
