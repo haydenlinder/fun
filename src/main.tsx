@@ -314,6 +314,9 @@ function Water() {
         opacity={0.8}
         roughness={0.1}
         metalness={0.3}
+        polygonOffset
+        polygonOffsetFactor={-1}
+        polygonOffsetUnits={-1}
       />
     </mesh>
   )
