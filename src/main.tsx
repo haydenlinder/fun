@@ -686,6 +686,165 @@ function FragmentsContainer({ fragments }: {
   )
 }
 
+// Laser beam component - a single laser shot
+interface LaserData {
+  id: number
+  start: THREE.Vector3
+  end: THREE.Vector3
+  createdAt: number
+}
+
+function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE.Vector3, createdAt: number }) {
+  const meshRef = useRef<THREE.Mesh>(null!)
+  const glowRef = useRef<THREE.Mesh>(null!)
+  const [opacity, setOpacity] = useState(1)
+  
+  // Calculate beam geometry
+  const { midpoint, length, rotation } = useMemo(() => {
+    const direction = new THREE.Vector3().subVectors(end, start)
+    const length = direction.length()
+    const midpoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5)
+    
+    // Calculate rotation to align cylinder with the laser direction
+    const up = new THREE.Vector3(0, 1, 0)
+    const quaternion = new THREE.Quaternion()
+    quaternion.setFromUnitVectors(up, direction.normalize())
+    const euler = new THREE.Euler().setFromQuaternion(quaternion)
+    
+    return { midpoint, length, rotation: euler }
+  }, [start, end])
+  
+  useFrame((state) => {
+    const elapsed = state.clock.elapsedTime * 1000 - createdAt
+    const duration = 200 // Laser lasts 200ms
+    
+    if (elapsed > duration) {
+      setOpacity(0)
+    } else {
+      // Quick fade in, then fade out
+      const fadeIn = Math.min(1, elapsed / 30)
+      const fadeOut = Math.max(0, 1 - (elapsed - duration * 0.6) / (duration * 0.4))
+      setOpacity(fadeIn * fadeOut)
+      
+      // Pulse effect
+      const pulse = 1 + Math.sin(elapsed * 0.05) * 0.2
+      if (meshRef.current) {
+        meshRef.current.scale.x = pulse
+        meshRef.current.scale.z = pulse
+      }
+      if (glowRef.current) {
+        glowRef.current.scale.x = pulse * 1.5
+        glowRef.current.scale.z = pulse * 1.5
+      }
+    }
+  })
+  
+  if (opacity <= 0) return null
+  
+  return (
+    <group position={midpoint} rotation={rotation}>
+      {/* Inner bright core */}
+      <mesh ref={meshRef}>
+        <cylinderGeometry args={[0.05, 0.05, length, 8]} />
+        <meshBasicMaterial 
+          color="#ff0000" 
+          transparent 
+          opacity={opacity}
+        />
+      </mesh>
+      {/* Outer glow */}
+      <mesh ref={glowRef}>
+        <cylinderGeometry args={[0.15, 0.15, length, 8]} />
+        <meshBasicMaterial 
+          color="#ffcd44" 
+          transparent 
+          opacity={opacity * 0.4}
+        />
+      </mesh>
+      {/* Impact point glow */}
+      <mesh position={[0, -length / 2, 0]}>
+        <sphereGeometry args={[0.3, 16, 16]} />
+        <meshBasicMaterial 
+          color="#ffaa00" 
+          transparent 
+          opacity={opacity * 0.8}
+        />
+      </mesh>
+    </group>
+  )
+}
+
+// Laser system - manages all active lasers and listens for clicks
+function LaserSystem() {
+  const { camera, scene, gl, viewport } = useThree()
+  const [lasers, setLasers] = useState<LaserData[]>([])
+  const nextLaserId = useRef(0)
+  const raycaster = useMemo(() => new THREE.Raycaster(), [])
+  
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      // Convert mouse position to normalized device coordinates
+      const rect = gl.domElement.getBoundingClientRect()
+      const mouse = new THREE.Vector2(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1
+      )
+      
+      // Set up raycaster from camera through mouse position
+      raycaster.setFromCamera(mouse, camera)
+      
+      // Get all intersections
+      const intersects = raycaster.intersectObjects(scene.children, true)
+      
+      if (intersects.length > 0) {
+        // Calculate the center of the screen in world coordinates
+        // This is done by raycasting from the center of the screen (0, 0 in NDC)
+        const centerRay = new THREE.Raycaster()
+        centerRay.setFromCamera(new THREE.Vector2(0, 0), camera)
+        
+        // Start the laser from a point at the center of screen, near the camera
+        // This creates the effect of firing from the center of the viewport
+        const start = camera.position.clone()
+        const centerDirection = centerRay.ray.direction.clone()
+        start.add(centerDirection.multiplyScalar(2)) // Start 2 units in front of camera at center
+        
+        // Get the hit point as the end of the laser
+        const end = intersects[0].point.clone()
+        
+        const newLaser: LaserData = {
+          id: nextLaserId.current++,
+          start,
+          end,
+          createdAt: performance.now()
+        }
+        
+        setLasers(prev => [...prev, newLaser])
+        
+        // Remove laser after animation completes
+        setTimeout(() => {
+          setLasers(prev => prev.filter(l => l.id !== newLaser.id))
+        }, 300)
+      }
+    }
+    
+    gl.domElement.addEventListener('click', handleClick)
+    return () => gl.domElement.removeEventListener('click', handleClick)
+  }, [camera, scene, gl, raycaster])
+  
+  return (
+    <>
+      {lasers.map(laser => (
+        <LaserBeam 
+          key={laser.id}
+          start={laser.start}
+          end={laser.end}
+          createdAt={laser.createdAt}
+        />
+      ))}
+    </>
+  )
+}
+
 // Helper to get terrain height at a position
 function getTerrainHeight(x: number, z: number): number {
   const nx = (x / 200) + 0.5
@@ -1172,6 +1331,9 @@ function Scene() {
       <Trees />
       <Rocks />
       <Sheep />
+      
+      {/* Laser System */}
+      <LaserSystem />
     </>
   )
 }
