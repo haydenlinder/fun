@@ -9,22 +9,183 @@ import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
 import "./App.css"
 
 
-// Generate height map data for terrain
+// Simple seeded random number generator for consistent terrain
+function seededRandom(seed: number): () => number {
+  return function() {
+    seed = (seed * 9301 + 49297) % 233280
+    return seed / 233280
+  }
+}
+
+// 2D Perlin-like noise implementation
+const permutation: number[] = []
+const gradients: [number, number][] = []
+
+// Initialize noise tables
+function initNoise(seed: number = 42) {
+  const rng = seededRandom(seed)
+  
+  // Create permutation table
+  for (let i = 0; i < 256; i++) {
+    permutation[i] = i
+  }
+  // Shuffle permutation
+  for (let i = 255; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1))
+    ;[permutation[i], permutation[j]] = [permutation[j], permutation[i]]
+  }
+  // Duplicate for overflow
+  for (let i = 0; i < 256; i++) {
+    permutation[256 + i] = permutation[i]
+  }
+  
+  // Create gradient vectors
+  for (let i = 0; i < 256; i++) {
+    const angle = rng() * Math.PI * 2
+    gradients[i] = [Math.cos(angle), Math.sin(angle)]
+  }
+}
+
+initNoise(12345) // Initialize with a seed
+
+// Smooth interpolation function (5th order polynomial)
+function fade(t: number): number {
+  return t * t * t * (t * (t * 6 - 15) + 10)
+}
+
+// Linear interpolation
+function lerp(a: number, b: number, t: number): number {
+  return a + t * (b - a)
+}
+
+// Dot product of gradient and distance vector
+function dotGrad(hash: number, x: number, y: number): number {
+  const g = gradients[hash & 255]
+  return g[0] * x + g[1] * y
+}
+
+// 2D Perlin noise
+function perlin2D(x: number, y: number): number {
+  // Grid cell coordinates
+  const xi = Math.floor(x) & 255
+  const yi = Math.floor(y) & 255
+  
+  // Relative position within cell
+  const xf = x - Math.floor(x)
+  const yf = y - Math.floor(y)
+  
+  // Fade curves
+  const u = fade(xf)
+  const v = fade(yf)
+  
+  // Hash coordinates of 4 corners
+  const aa = permutation[permutation[xi] + yi]
+  const ab = permutation[permutation[xi] + yi + 1]
+  const ba = permutation[permutation[xi + 1] + yi]
+  const bb = permutation[permutation[xi + 1] + yi + 1]
+  
+  // Blend
+  const x1 = lerp(dotGrad(aa, xf, yf), dotGrad(ba, xf - 1, yf), u)
+  const x2 = lerp(dotGrad(ab, xf, yf - 1), dotGrad(bb, xf - 1, yf - 1), u)
+  
+  return lerp(x1, x2, v)
+}
+
+// Fractal Brownian Motion - multiple octaves of noise (like Minecraft)
+function fbm(x: number, y: number, octaves: number, lacunarity: number = 2, persistence: number = 0.5): number {
+  let value = 0
+  let amplitude = 1
+  let frequency = 1
+  let maxValue = 0
+  
+  for (let i = 0; i < octaves; i++) {
+    value += perlin2D(x * frequency, y * frequency) * amplitude
+    maxValue += amplitude
+    amplitude *= persistence
+    frequency *= lacunarity
+  }
+  
+  return value / maxValue
+}
+
+// Ridged noise for mountain ridges
+function ridgedNoise(x: number, y: number, octaves: number): number {
+  let value = 0
+  let amplitude = 1
+  let frequency = 1
+  let maxValue = 0
+  
+  for (let i = 0; i < octaves; i++) {
+    let n = perlin2D(x * frequency, y * frequency)
+    n = 1 - Math.abs(n) // Create ridges
+    n = n * n // Sharpen ridges
+    value += n * amplitude
+    maxValue += amplitude
+    amplitude *= 0.5
+    frequency *= 2
+  }
+  
+  return value / maxValue
+}
+
+// Generate height map data for terrain with Minecraft-style procedural generation
 function generateHeightData(width: number, depth: number, scale: number) {
   const data = []
+  const noiseScale = 0.015 // Controls terrain feature frequency
+  
   for (let i = 0; i < depth; i++) {
     for (let j = 0; j < width; j++) {
-      const x = j / width
-      const z = i / depth
-      // Multiple octaves of noise for more realistic terrain
-      let height = 0
-      height += Math.sin(x * 8 + 0.5) * Math.cos(z * 6) * 2
-      height += Math.sin(x * 15 + 1) * Math.cos(z * 12 + 0.5) * 1
-      height += Math.sin(x * 30) * Math.cos(z * 25) * 0.5
-      height += Math.sin(x * 50 + 2) * Math.cos(z * 45 + 1) * 0.25
-      // Add some rolling hills
-      height += Math.sin(x * 3) * 3
-      height += Math.cos(z * 4) * 2
+      // Map grid indices to normalized coordinates [0, 1]
+      const nx = j / (width - 1)
+      const nz = i / (depth - 1)
+      // Scale for noise sampling
+      const x = nx * 8 // Gives us 8 "tiles" of noise across terrain
+      const z = nz * 8
+      
+      // Base terrain - gentle rolling hills (multiple octaves of noise)
+      let height = fbm(x, z, 6, 2, 0.5) * 8
+      
+      // Continental/biome-scale variation
+      const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
+      
+      // Mountains - use ridged noise for dramatic peaks
+      const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
+      const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
+      const mountainHeight = mountainNoise * mountainMask * 45
+      
+      // Cliffs - create steep areas using derivative of noise
+      const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
+      const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 100
+      const cliffContribution = Math.min(cliffiness * 2, 15) * Math.max(0, cliffNoise + 0.2)
+      
+      // Valley carving - negative contribution in some areas
+      const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
+      const valleyDepth = Math.max(0, -valleyNoise - 0.2) * 20
+      
+      // Plateaus - flat elevated areas
+      const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
+      const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
+      const plateauHeight = plateauMask > 0.1 ? plateauMask * 12 : 0
+      
+      // Small detail noise for rocky texture
+      const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 1.5
+      
+      // Combine all features
+      height += continentalNoise * 5
+      height += mountainHeight
+      height += cliffContribution
+      height -= valleyDepth
+      height += plateauHeight
+      height += detailNoise
+      
+      // Cave entrance depressions - carve holes into hillsides
+      const caveNoise = fbm(x * 0.8 + 400, z * 0.8 + 400, 3, 2, 0.5)
+      if (caveNoise > 0.4 && height > 5) {
+        // Create a depression that could be a cave entrance
+        const caveDepth = (caveNoise - 0.4) * 8
+        height -= caveDepth
+      }
+      
       data.push(height * scale)
     }
   }
@@ -78,16 +239,31 @@ function Terrain() {
         r = 0.4
         g = 0.6
         b = 0.25
-      } else if (height < 5) {
-        // Higher areas - brownish
+      } else if (height < 8) {
+        // Higher areas - brownish (cliff/hill tops)
         r = 0.5
         g = 0.45
         b = 0.3
+      } else if (height < 15) {
+        // Mountain slopes - rocky gray
+        r = 0.55
+        g = 0.5
+        b = 0.45
+      } else if (height < 25) {
+        // High mountain - darker rocky
+        r = 0.45
+        g = 0.42
+        b = 0.4
+      } else if (height < 35) {
+        // Near peak - lighter rocky with hints of snow
+        r = 0.65
+        g = 0.63
+        b = 0.62
       } else {
-        // Peaks - rocky gray
-        r = 0.6
-        g = 0.55
-        b = 0.5
+        // Snow caps - white/light gray
+        r = 0.9
+        g = 0.92
+        b = 0.95
       }
       
       // Add some variation
@@ -242,21 +418,15 @@ function DestructibleTree({ x, y, z, scale }: { x: number, y: number, z: number,
 function Trees() {
   const trees = useMemo(() => {
     const treeData = []
-    for (let i = 0; i < 1000; i++) {
-      const x = (Math.random() - 0.5) * 900
-      const z = (Math.random() - 0.5) * 900
-      // Calculate approximate height at this position
-      const nx = (x / 1000) + 0.5
-      const nz = (z / 1000) + 0.5
-      let height = 0
-      height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
-      height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
-      height += Math.sin(nx * 3) * 3
-      height += Math.cos(nz * 4) * 2
+    const rng = seededRandom(54321) // Use seeded random for consistent tree placement
+    for (let i = 0; i < 1500; i++) {
+      const x = (rng() - 0.5) * 900
+      const z = (rng() - 0.5) * 900
+      const height = getTerrainHeight(x, z)
       
-      // Only place trees above water level and below peaks
-      if (height > -1 && height < 4) {
-        treeData.push({ x, y: height, z, scale: 0.5 + Math.random() * 2 })
+      // Only place trees in grassy areas (not underwater, not on mountains)
+      if (height > 0 && height < 12) {
+        treeData.push({ x, y: height, z, scale: 0.5 + rng() * 2 })
       }
     }
     return treeData
@@ -752,15 +922,58 @@ function LaserSystem() {
   )
 }
 
-// Helper to get terrain height at a position
-function getTerrainHeight(x: number, z: number): number {
-  const nx = (x / 1000) + 0.5
-  const nz = (z / 1000) + 0.5
-  let height = 0
-  height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
-  height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
-  height += Math.sin(nx * 3) * 3
-  height += Math.cos(nz * 4) * 2
+// Helper to get terrain height at a position using the same noise as terrain generation
+function getTerrainHeight(worldX: number, worldZ: number): number {
+  // Convert world position to normalized [0,1] then to noise coordinates
+  // Terrain is 1000x1000, centered at origin (-500 to +500)
+  const nx = (worldX + 500) / 1000  // Maps -500..500 to 0..1
+  const nz = (worldZ + 500) / 1000
+  const x = nx * 8  // Same scaling as generateHeightData
+  const z = nz * 8
+  
+  // Base terrain - gentle rolling hills (multiple octaves of noise)
+  let height = fbm(x, z, 6, 2, 0.5) * 8
+  
+  // Continental/biome-scale variation
+  const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
+  
+  // Mountains - use ridged noise for dramatic peaks
+  const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
+  const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
+  const mountainHeight = mountainNoise * mountainMask * 45
+  
+  // Cliffs - create steep areas using derivative of noise
+  const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
+  const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 100
+  const cliffContribution = Math.min(cliffiness * 2, 15) * Math.max(0, cliffNoise + 0.2)
+  
+  // Valley carving - negative contribution in some areas
+  const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
+  const valleyDepth = Math.max(0, -valleyNoise - 0.2) * 20
+  
+  // Plateaus - flat elevated areas
+  const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
+  const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
+  const plateauHeight = plateauMask > 0.1 ? plateauMask * 12 : 0
+  
+  // Small detail noise for rocky texture
+  const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 1.5
+  
+  // Combine all features
+  height += continentalNoise * 5
+  height += mountainHeight
+  height += cliffContribution
+  height -= valleyDepth
+  height += plateauHeight
+  height += detailNoise
+  
+  // Cave entrance depressions
+  const caveNoise = fbm(x * 0.8 + 400, z * 0.8 + 400, 3, 2, 0.5)
+  if (caveNoise > 0.4 && height > 5) {
+    const caveDepth = (caveNoise - 0.4) * 8
+    height -= caveDepth
+  }
+  
   return height
 }
 
@@ -1202,27 +1415,159 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
   )
 }
 
+// Cave entrance component - creates dark cave openings in cliff faces and mountains
+function Cave({ x, y, z, rotY, scale }: { x: number, y: number, z: number, rotY: number, scale: number }) {
+  return (
+    <group position={[x, y, z]} rotation={[0, rotY, 0]} scale={scale}>
+      {/* Cave entrance arch - made of rocks */}
+      <mesh position={[0, 3, 0]} castShadow>
+        <torusGeometry args={[3, 1.2, 8, 12, Math.PI]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      
+      {/* Left pillar rocks */}
+      <mesh position={[-2.8, 1.5, 0]} castShadow>
+        <dodecahedronGeometry args={[1.5, 0]} />
+        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
+      </mesh>
+      <mesh position={[-3.2, 3, 0.3]} castShadow>
+        <dodecahedronGeometry args={[1, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      
+      {/* Right pillar rocks */}
+      <mesh position={[2.8, 1.5, 0]} castShadow>
+        <dodecahedronGeometry args={[1.5, 0]} />
+        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
+      </mesh>
+      <mesh position={[3.2, 3, -0.3]} castShadow>
+        <dodecahedronGeometry args={[1, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      
+      {/* Top rocks */}
+      <mesh position={[0, 5.5, 0]} castShadow>
+        <dodecahedronGeometry args={[1.3, 0]} />
+        <meshStandardMaterial color="#3d3d3d" roughness={0.95} />
+      </mesh>
+      <mesh position={[-1.5, 5, 0.2]} castShadow>
+        <dodecahedronGeometry args={[0.9, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      <mesh position={[1.5, 5.2, -0.2]} castShadow>
+        <dodecahedronGeometry args={[0.8, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      
+      {/* Cave interior darkness - deep black plane recessed into cliff */}
+      <mesh position={[0, 2.5, 1]} receiveShadow>
+        <planeGeometry args={[5, 5]} />
+        <meshStandardMaterial color="#0a0a0a" roughness={1} />
+      </mesh>
+      
+      {/* Depth illusion - darker planes going back */}
+      <mesh position={[0, 2.5, 2]}>
+        <planeGeometry args={[4, 4]} />
+        <meshBasicMaterial color="#050505" />
+      </mesh>
+      <mesh position={[0, 2.5, 3]}>
+        <planeGeometry args={[3, 3]} />
+        <meshBasicMaterial color="#020202" />
+      </mesh>
+      
+      {/* Floor rubble */}
+      <mesh position={[-1, 0.3, -0.5]} castShadow>
+        <dodecahedronGeometry args={[0.4, 0]} />
+        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
+      </mesh>
+      <mesh position={[0.8, 0.25, -0.3]} castShadow>
+        <dodecahedronGeometry args={[0.35, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+      <mesh position={[1.5, 0.2, -0.8]} castShadow>
+        <dodecahedronGeometry args={[0.3, 0]} />
+        <meshStandardMaterial color="#5a5a5a" roughness={0.95} />
+      </mesh>
+      <mesh position={[-0.5, 0.2, -1]} castShadow>
+        <dodecahedronGeometry args={[0.25, 0]} />
+        <meshStandardMaterial color="#4a4a4a" roughness={0.95} />
+      </mesh>
+    </group>
+  )
+}
+
+// Caves placed at cliff faces and mountain bases
+function Caves() {
+  const caveData = useMemo(() => {
+    // Place caves at strategic locations near cliffs and mountains
+    return [
+      // Caves at cliff faces
+      { x: -200, z: 0, rotY: Math.PI * 0.5, scale: 2 }, // First cliff
+      { x: -180, z: 50, rotY: Math.PI * 0.6, scale: 1.5 },
+      { x: 150, z: -100, rotY: -Math.PI * 0.5, scale: 2.2 }, // Second cliff
+      { x: 130, z: -50, rotY: -Math.PI * 0.4, scale: 1.8 },
+      { x: 0, z: 150, rotY: Math.PI, scale: 1.6 }, // Third cliff
+      
+      // Caves at mountain bases
+      { x: -350, z: -300, rotY: Math.PI * 0.3, scale: 2.5 }, // Mountain 1
+      { x: 350, z: -350, rotY: -Math.PI * 0.2, scale: 3 }, // Mountain 2
+      { x: -400, z: 350, rotY: Math.PI * 0.7, scale: 2 }, // Mountain 3
+      { x: 400, z: 300, rotY: -Math.PI * 0.6, scale: 2.8 }, // Mountain 4
+      { x: 0, z: -400, rotY: 0, scale: 2.2 }, // Mountain 5
+      { x: 0, z: 400, rotY: Math.PI, scale: 2.4 }, // Mountain 6
+    ]
+  }, [])
+
+  return (
+    <group>
+      {caveData.map((cave, i) => {
+        // Calculate terrain height at cave position
+        const nx = (cave.x / 1000) + 0.5
+        const nz = (cave.z / 1000) + 0.5
+        let height = 0
+        height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
+        height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
+        height += Math.sin(nx * 3) * 3
+        height += Math.cos(nz * 4) * 2
+        
+        return (
+          <Cave
+            key={i}
+            x={cave.x}
+            y={Math.max(height, 0)} // Place at terrain height or water level
+            z={cave.z}
+            rotY={cave.rotY}
+            scale={cave.scale}
+          />
+        )
+      })}
+    </group>
+  )
+}
+
 function Rocks() {
   const rocks = useMemo(() => {
     const rockData = []
-    for (let i = 0; i < 500; i++) {
-      const x = (Math.random() - 0.5) * 900
-      const z = (Math.random() - 0.5) * 900
-      const nx = (x / 1000) + 0.5
-      const nz = (z / 1000) + 0.5
-      let height = 0
-      height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
-      height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
-      height += Math.sin(nx * 3) * 3
-      height += Math.cos(nz * 4) * 2
+    const rng = seededRandom(98765) // Use seeded random for consistent rock placement
+    for (let i = 0; i < 800; i++) {
+      const x = (rng() - 0.5) * 900
+      const z = (rng() - 0.5) * 900
+      const height = getTerrainHeight(x, z)
       
+      // Place rocks everywhere except deep underwater
       if (height > -2) {
+        // More rocks on mountain slopes and cliffs
+        const isHighAltitude = height > 10
+        const scale = isHighAltitude 
+          ? 0.5 + rng() * 3 // Bigger boulders on mountains
+          : 0.3 + rng() * (rng() > 0.9 ? 4 : 1)
+        
         rockData.push({ 
           x, 
           y: height - 0.3, 
           z, 
-          scale: 0.3 + Math.random() * ( Math.random() > .9 ? 5 : 1),
-          rotY: Math.random() * Math.PI * 2
+          scale,
+          rotY: rng() * Math.PI * 2
         })
       }
     }
@@ -1250,11 +1595,11 @@ function Scene() {
     <>
       {/* Camera Controls */}
       <MapControls 
-      makeDefault
-    maxPolarAngle={1.55}
+        makeDefault
+        maxPolarAngle={1.55}
         // enableDamping
         // dampingFactor={0.05}
-        minDistance={0}
+        minDistance={50}
         maxDistance={500}
         // maxPolarAngle={Math.PI / 2 - 0.1}
       />
@@ -1310,7 +1655,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 1000 }}
+    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 1500 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
