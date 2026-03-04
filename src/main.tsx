@@ -2,14 +2,12 @@ import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
 import { useRef, useMemo, useEffect, useState, useCallback } from 'react'
 import { Canvas, useFrame, extend, useThree } from '@react-three/fiber'
-import { OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
+import { ArcballControls, MapControls, OrbitControls, Sky, shaderMaterial } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
 import "./App.css"
 
-// Import web worker for grass generation
-import GrassWorker from './grassWorker?worker'
 
 // Generate height map data for terrain
 function generateHeightData(width: number, depth: number, scale: number) {
@@ -37,8 +35,8 @@ function Terrain() {
   const meshRef = useRef<THREE.Mesh>(null!)
   
   const geometry = useMemo(() => {
-    const width = 200
-    const depth = 200
+    const width = 1000
+    const depth = 1000
     const segmentsX = 128
     const segmentsZ = 128
     
@@ -121,17 +119,10 @@ function Terrain() {
 }
 
 function Water() {
-  const waterRef = useRef<THREE.Mesh>(null!)
-  
-  useFrame((state) => {
-    if (waterRef.current) {
-      waterRef.current.position.y = -3 + Math.sin(state.clock.elapsedTime * 0.5) * 0.1
-    }
-  })
   
   return (
-    <mesh ref={waterRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]} receiveShadow>
-      <planeGeometry args={[200, 200]} />
+    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -3, 0]} receiveShadow>
+      <planeGeometry args={[1000, 1000]} />
       <meshStandardMaterial 
         color="#1a5276"
         transparent
@@ -251,12 +242,12 @@ function DestructibleTree({ x, y, z, scale }: { x: number, y: number, z: number,
 function Trees() {
   const trees = useMemo(() => {
     const treeData = []
-    for (let i = 0; i < 100; i++) {
-      const x = (Math.random() - 0.5) * 180
-      const z = (Math.random() - 0.5) * 180
+    for (let i = 0; i < 1000; i++) {
+      const x = (Math.random() - 0.5) * 900
+      const z = (Math.random() - 0.5) * 900
       // Calculate approximate height at this position
-      const nx = (x / 200) + 0.5
-      const nz = (z / 200) + 0.5
+      const nx = (x / 1000) + 0.5
+      const nz = (z / 1000) + 0.5
       let height = 0
       height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
       height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
@@ -265,7 +256,7 @@ function Trees() {
       
       // Only place trees above water level and below peaks
       if (height > -1 && height < 4) {
-        treeData.push({ x, y: height, z, scale: 0.5 + Math.random() * 1 })
+        treeData.push({ x, y: height, z, scale: 0.5 + Math.random() * 2 })
       }
     }
     return treeData
@@ -286,319 +277,6 @@ function Trees() {
   )
 }
 
-// GPU Grass Shader - wind animation runs entirely on the GPU
-const GrassShaderMaterial = shaderMaterial(
-  {
-    uTime: 0,
-    uWindStrength: 0.12,
-    uWindSpeed: 1.0,
-    fogColor: new THREE.Color('#81abb7'),
-    fogNear: 1,
-    fogFar: 50,
-  },
-  // Vertex Shader - dramatic bending and movement
-  `
-    attribute vec3 instancePosition;
-    attribute vec3 instanceColor;
-    attribute float instanceRotation;
-    attribute float instanceScale;
-    attribute float instancePhase;
-    attribute float instanceBend;
-    attribute float instanceTilt;
-    
-    uniform float uTime;
-    uniform float uWindStrength;
-    uniform float uWindSpeed;
-    
-    varying vec3 vColor;
-    varying vec3 vNormal;
-    varying float vHeight;
-    varying vec3 vWorldPos;
-    varying float vAO;
-    varying float vSunExposure;
-    
-    mat3 rotateY(float angle) {
-      float c = cos(angle);
-      float s = sin(angle);
-      return mat3(c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c);
-    }
-    
-    void main() {
-      // Normalize height for shader calculations (0 to 1)
-      float normalizedHeight = position.y / 0.4;
-      vHeight = normalizedHeight;
-      vColor = instanceColor;
-      
-      // Multi-layered wind with more movement
-      float windTime = uTime * uWindSpeed;
-      float wx = instancePosition.x * 0.04 + instancePosition.z * 0.025;
-      
-      // Primary wind wave - strong and sweeping
-      float wind1 = sin(windTime * 0.7 + wx + instancePhase) * 0.7;
-      // Secondary turbulence
-      float wind2 = sin(windTime * 1.5 + wx * 1.8 + instancePhase * 0.6) * 0.35;
-      // High frequency flutter
-      float wind3 = sin(windTime * 2.5 + wx * 3.0 + instancePhase * 1.5) * 0.15;
-      // Cross-wind
-      float crossWind = cos(windTime * 0.9 + instancePosition.z * 0.06) * 0.4;
-      
-      float totalWind = wind1 + wind2 + wind3;
-      
-      // Height-cubed for more dramatic top bending
-      float bendInfluence = normalizedHeight * normalizedHeight * normalizedHeight;
-      float bendInfluence2 = normalizedHeight * normalizedHeight;
-      
-      vec3 pos = position;
-      
-      // Scale blade - keep thin, only slight width variation
-      pos.y *= instanceScale;
-      pos.x *= (0.9 + instanceScale * 0.2);  // Much less width scaling
-      
-      // Apply rotation
-      pos = rotateY(instanceRotation) * pos;
-      
-      // DRAMATIC natural droop/tilt - blades lean significantly
-      float tiltAmount = instanceTilt * bendInfluence * 0.25;
-      pos.x += tiltAmount;
-      
-      // DRAMATIC pre-bend curve - natural arch
-      float preBend = instanceBend * bendInfluence * 0.18;
-      pos.z += preBend;
-      
-      // Additional quadratic bend for curved shape
-      float curveBend = bendInfluence2 * 0.08 * instanceScale;
-      pos.z += curveBend;
-      
-      // Wind sway - more dramatic
-      float windSway = totalWind * uWindStrength * bendInfluence * instanceScale;
-      float crossSway = crossWind * uWindStrength * 0.5 * bendInfluence * instanceScale;
-      pos.x += windSway;
-      pos.z += crossSway;
-      
-      // Compensate height when bending significantly
-      float totalBend = abs(windSway) + abs(tiltAmount) + abs(preBend) + abs(crossSway);
-      pos.y *= 1.0 - totalBend * 0.12;
-      
-      pos += instancePosition;
-      
-      vWorldPos = pos;
-      
-      // Stronger AO at base
-      vAO = pow(normalizedHeight, 0.7) * 0.7 + 0.3;
-      
-      // Calculate sun exposure based on blade orientation
-      vec3 sunDir = normalize(vec3(0.5, 0.8, 0.3));
-      float bendDir = atan(tiltAmount + windSway, pos.y - instancePosition.y);
-      vSunExposure = max(0.0, sin(bendDir + 0.5)) * normalizedHeight;
-      
-      vNormal = normalize(normalMatrix * rotateY(instanceRotation) * normal);
-      
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-    }
-  `,
-  // Fragment Shader - high contrast with bright sunlit tips
-  `
-    uniform vec3 fogColor;
-    uniform float fogNear;
-    uniform float fogFar;
-    
-    varying vec3 vColor;
-    varying vec3 vNormal;
-    varying float vHeight;
-    varying vec3 vWorldPos;
-    varying float vAO;
-    varying float vSunExposure;
-    
-    void main() {
-      vec3 lightDir = normalize(vec3(0.5, 0.8, 0.3));
-      vec3 viewDir = normalize(cameraPosition - vWorldPos);
-      vec3 normal = normalize(vNormal);
-      
-      // Strong wrapped diffuse
-      float NdotL = dot(normal, lightDir);
-      float diffuse = NdotL * 0.45 + 0.55;
-      
-      // Enhanced subsurface scattering
-      float scatter = pow(clamp(-NdotL * 0.6 + 0.5, 0.0, 1.0), 1.8) * 0.5;
-      vec3 scatterColor = vec3(0.5, 0.75, 0.25); // Bright lime transmission
-      
-      // Rim lighting
-      float rim = pow(1.0 - max(0.0, dot(viewDir, normal)), 2.5) * 0.2;
-      
-      // DARK base, BRIGHT tips - strong contrast
-      float heightContrast = pow(vHeight, 0.8);
-      vec3 darkBase = vColor * 0.25; // Very dark at ground
-      vec3 brightTip = vColor * 1.4; // Overbright at tips
-      vec3 baseColor = mix(darkBase, brightTip, heightContrast);
-      
-      // Golden sunlit tips
-      vec3 sunTint = vec3(0.18, 0.15, -0.05) * vHeight * vHeight;
-      baseColor += sunTint;
-      
-      // Extra brightness for sun-exposed blades
-      baseColor += vec3(0.08, 0.1, 0.02) * vSunExposure;
-      
-      // Combine lighting with strong AO
-      vec3 color = baseColor * diffuse * vAO;
-      
-      // Add scattering (lime glow when backlit)
-      color += scatterColor * scatter * vHeight * 0.8;
-      
-      // Rim highlight (bright edges)
-      color += vec3(0.95, 1.0, 0.7) * rim * vHeight;
-      
-      // Subtle specular for wet/dewy look
-      vec3 halfDir = normalize(lightDir + viewDir);
-      float spec = pow(max(0.0, dot(normal, halfDir)), 48.0) * 0.12;
-      color += vec3(1.0, 1.0, 0.9) * spec * vHeight;
-      
-      // Cool shadow ambient
-      vec3 shadowColor = vColor * vec3(0.6, 0.7, 0.9) * 0.12;
-      color += shadowColor * (1.0 - vAO);
-      
-      
-      // Slight saturation boost
-      float luminance = dot(color, vec3(0.299, 0.587, 0.114));
-      color = mix(vec3(luminance), color, 1.15);
-      
-      // Apply fog - linear fog based on distance from camera
-      float fogDistance = length(vWorldPos - cameraPosition);
-      float fogFactor = smoothstep(fogNear, fogFar, fogDistance);
-      color = mix(color, fogColor, fogFactor);
-      
-      // Fade out grass completely at distance so terrain shows through
-      float alpha = 1.0 - smoothstep(fogFar * 0.6, fogFar * 0.9, fogDistance);
-      
-      if (alpha < 0.01) discard;
-      
-      gl_FragColor = vec4(color, alpha);
-    }
-  `
-)
-
-// Extend so React Three Fiber recognizes our custom material
-extend({ GrassShaderMaterial })
-
-// TypeScript declaration for the custom material
-declare module '@react-three/fiber' {
-  interface ThreeElements {
-    grassShaderMaterial: any
-  }
-}
-
-function Grass() {
-  const meshRef = useRef<THREE.Mesh>(null!)
-  const materialRef = useRef<any>(null!)
-  const [geometry, setGeometry] = useState<THREE.InstancedBufferGeometry | null>(null)
-  const [_, setIsLoading] = useState(true)
-  
-  // Create base blade geometry (small, runs on main thread)
-  const bladeGeo = useMemo(() => {
-    const bladeWidth = 0.015  // Thin blades
-    const bladeHeight = 0.4
-    const segments = 5
-    
-    const vertices: number[] = []
-    
-    for (let i = 0; i < segments; i++) {
-      const t1 = i / segments
-      const t2 = (i + 1) / segments
-      
-      const w1 = bladeWidth * (1 - t1 * 0.9)
-      const w2 = bladeWidth * (1 - t2 * 0.9)
-      
-      const y1 = t1 * bladeHeight
-      const y2 = t2 * bladeHeight
-      
-      const curve1 = t1 * t1 * 0.04
-      const curve2 = t2 * t2 * 0.04
-      
-      vertices.push(
-        -w1, y1, curve1,
-        w1, y1, curve1,
-        w2, y2, curve2,
-        -w1, y1, curve1,
-        w2, y2, curve2,
-        -w2, y2, curve2
-      )
-    }
-    
-    const geo = new THREE.BufferGeometry()
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3))
-    geo.computeVertexNormals()
-    return geo
-  }, [])
-  
-  // Use web worker to generate grass data off main thread
-  useEffect(() => {
-    const worker = new GrassWorker()
-    
-    worker.onmessage = (e) => {
-      const { positions, colors, rotations, scales, phases, bends, tilts, instanceCount } = e.data
-      
-      console.log(`GPU Grass (Worker): ${instanceCount.toLocaleString()} blades`)
-      
-      // Create instanced geometry with worker data
-      const instancedGeo = new THREE.InstancedBufferGeometry()
-      instancedGeo.index = bladeGeo.index
-      instancedGeo.setAttribute('position', bladeGeo.getAttribute('position'))
-      instancedGeo.setAttribute('normal', bladeGeo.getAttribute('normal'))
-      
-      instancedGeo.setAttribute('instancePosition', new THREE.InstancedBufferAttribute(positions, 3))
-      instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(colors, 3))
-      instancedGeo.setAttribute('instanceRotation', new THREE.InstancedBufferAttribute(rotations, 1))
-      instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(scales, 1))
-      instancedGeo.setAttribute('instancePhase', new THREE.InstancedBufferAttribute(phases, 1))
-      instancedGeo.setAttribute('instanceBend', new THREE.InstancedBufferAttribute(bends, 1))
-      instancedGeo.setAttribute('instanceTilt', new THREE.InstancedBufferAttribute(tilts, 1))
-      
-      instancedGeo.instanceCount = instanceCount
-      
-      setGeometry(instancedGeo)
-      setIsLoading(false)
-      worker.terminate()
-    }
-    
-    // HIGH DENSITY - dense carpet of grass (~3M+ blades)
-    worker.postMessage({
-      fieldSize: 200,
-      baseDensity: 2000,   // Dense base layer
-      mediumDensity: 1000,  // Medium grass
-      tallDensity: 1000,    // Tall grass
-      clusterCount: 300000      // Accent clusters
-    })
-    
-    return () => worker.terminate()
-  }, [bladeGeo])
-  
-  // Update time uniform and sync fog each frame
-  useFrame((state) => {
-    if (materialRef.current) {
-      materialRef.current.uTime = state.clock.elapsedTime
-      
-      // Sync fog with scene fog
-      const fog = state.scene.fog as THREE.Fog | null
-      if (fog) {
-        materialRef.current.fogColor = fog.color
-        materialRef.current.fogNear = fog.near
-        materialRef.current.fogFar = fog.far
-      }
-    }
-  })
-  
-  if (!geometry) return null
-  
-  return (
-    <mesh ref={meshRef} geometry={geometry} frustumCulled={false}>
-      <grassShaderMaterial 
-        ref={materialRef}
-        side={THREE.DoubleSide}
-        transparent={true}
-        depthWrite={true}
-      />
-    </mesh>
-  )
-}
 
 // Fragment component with physics - used for destruction debris
 function Fragment({ 
@@ -1047,8 +725,8 @@ function LaserSystem() {
 
 // Helper to get terrain height at a position
 function getTerrainHeight(x: number, z: number): number {
-  const nx = (x / 200) + 0.5
-  const nz = (z / 200) + 0.5
+  const nx = (x / 1000) + 0.5
+  const nz = (z / 1000) + 0.5
   let height = 0
   height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
   height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
@@ -1070,15 +748,34 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
   const [fragments, setFragments] = useState<THREE.Mesh[]>([])
   const [lastPosition, setLastPosition] = useState<[number, number, number]>([initialX, getTerrainHeight(initialX, initialZ) + 2, initialZ])
   
-  // Mutable state for movement behavior
-  const state = useRef({
-    targetX: initialX,
-    targetZ: initialZ,
-    rotY: Math.random() * Math.PI * 2,
-    moveSpeed: 1.5 + Math.random() * 1.5,
-    nextDirectionChange: Math.random() * 3,
-    isMoving: Math.random() > 0.5
-  })
+  // Mutable state for movement behavior - calculate initial valid target
+  const initialState = useMemo(() => {
+    // Find a valid initial target
+    let targetX = initialX
+    let targetZ = initialZ
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const angle = Math.random() * Math.PI * 2
+      const distance = 5 + Math.random() * 15
+      const testX = initialX + Math.cos(angle) * distance
+      const testZ = initialZ + Math.sin(angle) * distance
+      const testHeight = getTerrainHeight(testX, testZ)
+      if (testHeight >= 0 && testHeight <= 3.5) {
+        targetX = testX
+        targetZ = testZ
+        break
+      }
+    }
+    return {
+      targetX,
+      targetZ,
+      rotY: Math.random() * Math.PI * 2,
+      moveSpeed: 2 + Math.random() * 3, // Slightly slower for more natural grazing behavior
+      nextDirectionChange: Math.random() * 3 + 3, // Time until next direction change
+      isMoving: true // Start moving immediately
+    }
+  }, [initialX, initialZ])
+  
+  const state = useRef(initialState)
   
   const handleClick = useCallback(() => {
     if (destroyed) return
@@ -1176,17 +873,31 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
         sheep.targetX = currentX + Math.cos(angle) * distance
         sheep.targetZ = currentZ + Math.sin(angle) * distance
         
-        // Keep within bounds
-        sheep.targetX = Math.max(-60, Math.min(60, sheep.targetX))
-        sheep.targetZ = Math.max(-60, Math.min(60, sheep.targetZ))
+        // Keep within terrain bounds
+        sheep.targetX = Math.max(-250, Math.min(250, sheep.targetX))
+        sheep.targetZ = Math.max(-250, Math.min(250, sheep.targetZ))
         
         // Check if target is valid terrain
         const targetHeight = getTerrainHeight(sheep.targetX, sheep.targetZ)
         if (targetHeight < 0 || targetHeight > 3.5) {
-          // Invalid target, stay put
-          sheep.targetX = currentX
-          sheep.targetZ = currentZ
-          sheep.isMoving = false
+          // Invalid target, try to find a valid one nearby
+          let foundValid = false
+          for (let attempt = 0; attempt < 5; attempt++) {
+            const retryAngle = Math.random() * Math.PI * 2
+            const retryDist = 3 + Math.random() * 8
+            const testX = currentX + Math.cos(retryAngle) * retryDist
+            const testZ = currentZ + Math.sin(retryAngle) * retryDist
+            const testHeight = getTerrainHeight(testX, testZ)
+            if (testHeight >= 0 && testHeight <= 3.5) {
+              sheep.targetX = testX
+              sheep.targetZ = testZ
+              foundValid = true
+              break
+            }
+          }
+          if (!foundValid) {
+            sheep.isMoving = false
+          }
         }
       }
       sheep.nextDirectionChange = time + 2 + Math.random() * 5
@@ -1215,7 +926,28 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
         velX = (dx / dist) * sheep.moveSpeed
         velZ = (dz / dist) * sheep.moveSpeed
       } else {
-        sheep.isMoving = false
+        // Reached target - immediately pick a new one to keep moving
+        // Find a valid new target
+        let foundValid = false
+        for (let attempt = 0; attempt < 10; attempt++) {
+          const newAngle = Math.random() * Math.PI * 2
+          const newDist = 5 + Math.random() * 15
+          const testX = currentX + Math.cos(newAngle) * newDist
+          const testZ = currentZ + Math.sin(newAngle) * newDist
+          const testHeight = getTerrainHeight(testX, testZ)
+          if (testHeight >= 0 && testHeight <= 3.5 && 
+              Math.abs(testX) < 250 && Math.abs(testZ) < 250) {
+            sheep.targetX = testX
+            sheep.targetZ = testZ
+            foundValid = true
+            break
+          }
+        }
+        if (!foundValid) {
+          // Couldn't find valid target, rest briefly
+          sheep.isMoving = false
+          sheep.nextDirectionChange = time + 1 + Math.random() * 2 // Short rest
+        }
       }
     }
     
@@ -1344,9 +1076,9 @@ function Sheep() {
   // Generate initial sheep positions
   const sheepData = useMemo(() => {
     const data = []
-    for (let i = 0; i < 30; i++) {
-      const x = (Math.random() - 0.5) * 120
-      const z = (Math.random() - 0.5) * 120
+    for (let i = 0; i < 300; i++) {
+      const x = (Math.random() - 0.5) * 500
+      const z = (Math.random() - 0.5) * 500
       const height = getTerrainHeight(x, z)
       
       // Only place sheep on grass areas (above water, not too steep)
@@ -1444,11 +1176,11 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
 function Rocks() {
   const rocks = useMemo(() => {
     const rockData = []
-    for (let i = 0; i < 50; i++) {
-      const x = (Math.random() - 0.5) * 180
-      const z = (Math.random() - 0.5) * 180
-      const nx = (x / 200) + 0.5
-      const nz = (z / 200) + 0.5
+    for (let i = 0; i < 500; i++) {
+      const x = (Math.random() - 0.5) * 900
+      const z = (Math.random() - 0.5) * 900
+      const nx = (x / 1000) + 0.5
+      const nz = (z / 1000) + 0.5
       let height = 0
       height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
       height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
@@ -1460,7 +1192,7 @@ function Rocks() {
           x, 
           y: height - 0.3, 
           z, 
-          scale: 0.3 + Math.random() * 0.7,
+          scale: 0.3 + Math.random() * ( Math.random() > .9 ? 5 : 1),
           rotY: Math.random() * Math.PI * 2
         })
       }
@@ -1488,28 +1220,30 @@ function Scene() {
   return (
     <>
       {/* Camera Controls */}
-      <OrbitControls 
-        enableDamping
-        dampingFactor={0.05}
-        minDistance={5}
-        maxDistance={150}
-        maxPolarAngle={Math.PI / 2 - 0.1}
+      <MapControls 
+      makeDefault
+
+        // enableDamping
+        // dampingFactor={0.05}
+        minDistance={0}
+        maxDistance={500}
+        // maxPolarAngle={Math.PI / 2 - 0.1}
       />
       
       {/* Sky */}
       <Sky 
-        distance={200}
+        distance={1000}
         sunPosition={[100, 20, 100]}
         inclination={0.6}
         azimuth={0.25}
         turbidity={10}
         rayleigh={2}
         mieCoefficient={0.005}
-        mieDirectionalG={0.8}
+        mieDirectionalG={0.1}
       />
       
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['#81abb7', 1, 100]} />
+      {/* <fog attach="fog" args={['#81abb7', 1, 100]} /> */}
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
@@ -1533,7 +1267,6 @@ function Scene() {
       {/* Landscape Elements */}
       <Terrain />
       <Water />
-      <Grass />
       <Trees />
       <Rocks />
       <Sheep />
@@ -1546,8 +1279,9 @@ function Scene() {
 
 createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
+
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [30, 20, 50], fov: 60, near: 0.1, far: 125 }}
+    camera={{ position: [0, 10, 200], fov: 60, near: 0.1, far: 500 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
