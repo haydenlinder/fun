@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
-import { useRef, useMemo } from 'react'
-import { Canvas, useFrame } from '@react-three/fiber'
-import { OrbitControls, Sky, Environment } from '@react-three/drei'
+import { useRef, useMemo, useEffect } from 'react'
+import { Canvas, useFrame, extend } from '@react-three/fiber'
+import { OrbitControls, Sky, Environment, shaderMaterial } from '@react-three/drei'
 
 // Generate height map data for terrain
 function generateHeightData(width: number, depth: number, scale: number) {
@@ -185,6 +185,204 @@ function Trees() {
   )
 }
 
+// GPU Grass Shader - wind animation runs entirely on the GPU
+const GrassShaderMaterial = shaderMaterial(
+  {
+    uTime: 0,
+    uWindStrength: 0.15,
+    uWindSpeed: 1.2,
+  },
+  // Vertex Shader - runs on GPU for each vertex of each instance
+  `
+    // Per-instance attributes (stored on GPU, no CPU updates needed)
+    attribute vec3 instancePosition;
+    attribute vec3 instanceColor;
+    attribute float instanceRotation;
+    attribute float instanceScale;
+    attribute float instancePhase;
+    
+    uniform float uTime;
+    uniform float uWindStrength;
+    uniform float uWindSpeed;
+    
+    varying vec3 vColor;
+    varying vec3 vNormal;
+    varying float vHeight;
+    
+    // Rotation matrix around Y axis
+    mat3 rotateY(float angle) {
+      float c = cos(angle);
+      float s = sin(angle);
+      return mat3(
+        c, 0.0, s,
+        0.0, 1.0, 0.0,
+        -s, 0.0, c
+      );
+    }
+    
+    void main() {
+      vColor = instanceColor;
+      vHeight = position.y; // Local Y position (0 at base, higher at tip)
+      
+      // Wind calculation - entirely on GPU
+      float windWave = sin(uTime * uWindSpeed + instancePosition.x * 0.15 + instancePosition.z * 0.15 + instancePhase);
+      float windWave2 = cos(uTime * uWindSpeed * 0.6 + instancePosition.x * 0.08 - instancePosition.z * 0.1);
+      
+      // Sway increases with height (tip moves more than base)
+      float swayFactor = position.y * instanceScale * 0.5;
+      float swayX = windWave * uWindStrength * swayFactor;
+      float swayZ = windWave2 * uWindStrength * 0.5 * swayFactor;
+      
+      // Apply rotation, scale, and wind sway
+      vec3 pos = position;
+      pos.y *= instanceScale; // Scale height
+      pos = rotateY(instanceRotation) * pos; // Rotate around Y
+      
+      // Add wind displacement (more at top of blade)
+      pos.x += swayX;
+      pos.z += swayZ;
+      
+      // Add instance position
+      pos += instancePosition;
+      
+      // Transform normal
+      vNormal = normalize(normalMatrix * rotateY(instanceRotation) * normal);
+      
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+    }
+  `,
+  // Fragment Shader - runs on GPU for each pixel
+  `
+    varying vec3 vColor;
+    varying vec3 vNormal;
+    varying float vHeight;
+    
+    void main() {
+      // Simple lighting
+      vec3 lightDir = normalize(vec3(1.0, 1.0, 0.5));
+      float diff = max(dot(vNormal, lightDir), 0.0) * 0.5 + 0.5;
+      
+      // Darken base, lighten tips
+      float heightGradient = 0.7 + vHeight * 2.0;
+      
+      vec3 finalColor = vColor * diff * heightGradient;
+      
+      gl_FragColor = vec4(finalColor, 1.0);
+    }
+  `
+)
+
+// Extend so React Three Fiber recognizes our custom material
+extend({ GrassShaderMaterial })
+
+// TypeScript declaration for the custom material
+declare module '@react-three/fiber' {
+  interface ThreeElements {
+    grassShaderMaterial: any
+  }
+}
+
+function Grass() {
+  const meshRef = useRef<THREE.Mesh>(null!)
+  const materialRef = useRef<any>(null!)
+  
+  // Create instanced geometry with all data as GPU attributes
+  const geometry = useMemo(() => {
+    // Base blade geometry
+    const vertices = new Float32Array([
+      -0.02, 0, 0,  0.02, 0, 0,  0.015, 0.08, 0.01,
+      -0.02, 0, 0,  0.015, 0.08, 0.01,  -0.015, 0.08, 0.01,
+      -0.015, 0.08, 0.01,  0.015, 0.08, 0.01,  0.01, 0.16, 0.02,
+      -0.015, 0.08, 0.01,  0.01, 0.16, 0.02,  -0.01, 0.16, 0.02,
+      -0.01, 0.16, 0.02,  0.01, 0.16, 0.02,  0.005, 0.22, 0.03,
+      -0.01, 0.16, 0.02,  0.005, 0.22, 0.03,  -0.005, 0.22, 0.03,
+      -0.005, 0.22, 0.03,  0.005, 0.22, 0.03,  0, 0.28, 0.04,
+    ])
+    
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+    geo.computeVertexNormals()
+    
+    // Generate grass instance data
+    const positions: number[] = []
+    const colors: number[] = []
+    const rotations: number[] = []
+    const scales: number[] = []
+    const phases: number[] = []
+    
+    const clusterCount = 500000  // 500k grass blades - GPU handles this easily!
+    
+    for (let c = 0; c < clusterCount; c++) {
+      const clusterX = (Math.random() - 0.5) * 180
+      const clusterZ = (Math.random() - 0.5) * 180
+      
+      const nx = (clusterX / 200) + 0.5
+      const nz = (clusterZ / 200) + 0.5
+      let height = 0
+      height += Math.sin(nx * 8 + 0.5) * Math.cos(nz * 6) * 2
+      height += Math.sin(nx * 15 + 1) * Math.cos(nz * 12 + 0.5) * 1
+      height += Math.sin(nx * 30) * Math.cos(nz * 25) * 0.5
+      height += Math.sin(nx * 50 + 2) * Math.cos(nz * 45 + 1) * 0.25
+      height += Math.sin(nx * 3) * 3
+      height += Math.cos(nz * 4) * 2
+      
+      if (height > -1.5 && height < 4) {
+        positions.push(clusterX, height, clusterZ)
+        rotations.push(Math.random() * Math.PI * 2)
+        scales.push(1.2 + Math.random() * 2.0)
+        phases.push(Math.random() * Math.PI * 2)
+        
+        // Color variation
+        const shade = Math.random()
+        if (shade < 0.3) {
+          colors.push(0.1 + Math.random() * 0.1, 0.3 + Math.random() * 0.15, 0.05 + Math.random() * 0.05)
+        } else if (shade < 0.7) {
+          colors.push(0.15 + Math.random() * 0.1, 0.4 + Math.random() * 0.2, 0.1 + Math.random() * 0.08)
+        } else {
+          colors.push(0.3 + Math.random() * 0.15, 0.5 + Math.random() * 0.2, 0.1 + Math.random() * 0.1)
+        }
+      }
+    }
+    
+    const instanceCount = positions.length / 3
+    console.log(`GPU Grass: ${instanceCount} blades`)
+    
+    // Create instanced buffer geometry
+    const instancedGeo = new THREE.InstancedBufferGeometry()
+    instancedGeo.index = geo.index
+    instancedGeo.setAttribute('position', geo.getAttribute('position'))
+    instancedGeo.setAttribute('normal', geo.getAttribute('normal'))
+    
+    // Add per-instance attributes (these stay on GPU, never updated by CPU)
+    instancedGeo.setAttribute('instancePosition', new THREE.InstancedBufferAttribute(new Float32Array(positions), 3))
+    instancedGeo.setAttribute('instanceColor', new THREE.InstancedBufferAttribute(new Float32Array(colors), 3))
+    instancedGeo.setAttribute('instanceRotation', new THREE.InstancedBufferAttribute(new Float32Array(rotations), 1))
+    instancedGeo.setAttribute('instanceScale', new THREE.InstancedBufferAttribute(new Float32Array(scales), 1))
+    instancedGeo.setAttribute('instancePhase', new THREE.InstancedBufferAttribute(new Float32Array(phases), 1))
+    
+    instancedGeo.instanceCount = instanceCount
+    
+    return instancedGeo
+  }, [])
+  
+  // Only update time uniform each frame - single value, not 100k matrices!
+  useFrame((state) => {
+    if (materialRef.current) {
+      materialRef.current.uTime = state.clock.elapsedTime
+    }
+  })
+  
+  return (
+    <mesh ref={meshRef} geometry={geometry} frustumCulled={false}>
+      <grassShaderMaterial 
+        ref={materialRef}
+        side={THREE.DoubleSide}
+        transparent={false}
+      />
+    </mesh>
+  )
+}
+
 function Rocks() {
   const rocks = useMemo(() => {
     const rockData = []
@@ -283,6 +481,7 @@ function Scene() {
       {/* Landscape Elements */}
       <Terrain />
       <Water />
+      <Grass />
       <Trees />
       <Rocks />
     </>
