@@ -1610,7 +1610,7 @@ function Scene() {
         // enableDamping
         // dampingFactor={0.05}
         minDistance={50}
-        maxDistance={500}
+        maxDistance={1000}
         // maxPolarAngle={Math.PI / 2 - 0.1}
       />
       
@@ -1665,7 +1665,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [0, 20, 200], fov: 60, near: 0.1, far: 1500 }}
+    camera={{ position: [300, 100, 250], fov: 60, near: 0.1, far: 1500 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
