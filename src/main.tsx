@@ -129,6 +129,41 @@ function ridgedNoise(x: number, y: number, octaves: number): number {
 }
 
 // ============================================================================
+// TERRAIN DIMENSION CONFIGURATION
+// Single source of truth for all terrain size and geometry settings
+// Change these values to adjust the overall world dimensions
+// ============================================================================
+const TERRAIN_DIMENSIONS = {
+  // Overall terrain size (centered at origin, so extends from -SIZE/2 to +SIZE/2)
+  SIZE: 1000,
+  
+  // Terrain mesh resolution (segments per axis)
+  SEGMENTS: 128,
+  
+  // Half the terrain size (calculated for convenience)
+  get HALF_SIZE() { return this.SIZE / 2 },
+  
+  // Noise scale factor (how many "tiles" of noise across terrain)
+  NOISE_SCALE: 8,
+  
+  // Object spawn areas (as a fraction of terrain, or absolute values)
+  TREE_SPAWN_SPREAD: 900,
+  ROCK_SPAWN_SPREAD: 900,
+  SHEEP_SPAWN_SPREAD: 1000,
+  SHEEP_MOVEMENT_BOUNDS: 250,
+  
+  // Cloud settings
+  CLOUD_SPREAD: 1000,
+  CLOUD_HEIGHT: 150,
+  CLOUD_WRAP_DISTANCE: 500,
+  
+  // Camera and rendering
+  FOG_FAR: 1500,
+  CAMERA_FAR: 2000,
+  SHADOW_CAMERA_SIZE: 500,
+}
+
+// ============================================================================
 // TERRAIN ZONE CONFIGURATION
 // Single source of truth for all terrain elevation thresholds
 // Change these values to adjust where objects can be placed
@@ -143,7 +178,7 @@ const TERRAIN_ZONES = {
   
   // Sheep grazing zone - flat grassy areas only
   SHEEP_MIN: 0, //. water level
-  SHEEP_MAX: 5,
+  SHEEP_MAX: 20,
   
   // Tree zone - grassy to mid-elevation
   TREE_MIN: 0,
@@ -239,13 +274,13 @@ function calculateTerrainHeightAtNoiseCoords(x: number, z: number): number {
 }
 
 // Helper to get terrain height at a world position (used by objects for placement/collision)
-// Terrain is 1000x1000, centered at origin (-500 to +500)
+// Terrain is SIZE x SIZE, centered at origin (-HALF_SIZE to +HALF_SIZE)
 function getTerrainHeight(worldX: number, worldZ: number): number {
   // Convert world position to normalized [0,1] then to noise coordinates
-  const nx = (worldX + 500) / 1000  // Maps -500..500 to 0..1
-  const nz = (worldZ + 500) / 1000
-  const x = nx * 8  // Same scaling as generateHeightData
-  const z = nz * 8
+  const nx = (worldX + TERRAIN_DIMENSIONS.HALF_SIZE) / TERRAIN_DIMENSIONS.SIZE  // Maps -HALF_SIZE..HALF_SIZE to 0..1
+  const nz = (worldZ + TERRAIN_DIMENSIONS.HALF_SIZE) / TERRAIN_DIMENSIONS.SIZE
+  const x = nx * TERRAIN_DIMENSIONS.NOISE_SCALE  // Same scaling as generateHeightData
+  const z = nz * TERRAIN_DIMENSIONS.NOISE_SCALE
   
   return calculateTerrainHeightAtNoiseCoords(x, z)
 }
@@ -260,8 +295,8 @@ function generateHeightData(width: number, depth: number, scale: number) {
       const nx = j / (width - 1)
       const nz = i / (depth - 1)
       // Scale for noise sampling
-      const x = nx * 8 // Gives us 8 "tiles" of noise across terrain
-      const z = nz * 8
+      const x = nx * TERRAIN_DIMENSIONS.NOISE_SCALE // Gives us NOISE_SCALE "tiles" of noise across terrain
+      const z = nz * TERRAIN_DIMENSIONS.NOISE_SCALE
       
       // Use the shared height calculation function
       const height = calculateTerrainHeightAtNoiseCoords(x, z)
@@ -276,10 +311,10 @@ function Terrain() {
   const meshRef = useRef<THREE.Mesh>(null!)
   
   const geometry = useMemo(() => {
-    const width = 1000
-    const depth = 1000
-    const segmentsX = 128
-    const segmentsZ = 128
+    const width = TERRAIN_DIMENSIONS.SIZE
+    const depth = TERRAIN_DIMENSIONS.SIZE
+    const segmentsX = TERRAIN_DIMENSIONS.SEGMENTS
+    const segmentsZ = TERRAIN_DIMENSIONS.SEGMENTS
     
     const geo = new THREE.PlaneGeometry(width, depth, segmentsX, segmentsZ)
     geo.rotateX(-Math.PI / 2)
@@ -383,7 +418,7 @@ function Water() {
   
   return (
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0]} receiveShadow>
-      <planeGeometry args={[1000, 1000]} />
+      <planeGeometry args={[TERRAIN_DIMENSIONS.SIZE, TERRAIN_DIMENSIONS.SIZE]} />
       <meshStandardMaterial 
         color="#1a5276"
         transparent
@@ -508,8 +543,8 @@ function Trees() {
     const treeData = []
     const rng = seededRandom(54321) // Use seeded random for consistent tree placement
     for (let i = 0; i < 1000; i++) {
-      const x = (rng() - 0.5) * 900
-      const z = (rng() - 0.5) * 900
+      const x = (rng() - 0.5) * TERRAIN_DIMENSIONS.TREE_SPAWN_SPREAD
+      const z = (rng() - 0.5) * TERRAIN_DIMENSIONS.TREE_SPAWN_SPREAD
       const height = getTerrainHeight(x, z)
       
       // Only place trees in valid tree zones (uses terrain system)
@@ -1150,8 +1185,8 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
         sheep.targetZ = currentZ + Math.sin(angle) * distance
         
         // Keep within terrain bounds
-        sheep.targetX = Math.max(-250, Math.min(250, sheep.targetX))
-        sheep.targetZ = Math.max(-250, Math.min(250, sheep.targetZ))
+        sheep.targetX = Math.max(-TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS, Math.min(TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS, sheep.targetX))
+        sheep.targetZ = Math.max(-TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS, Math.min(TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS, sheep.targetZ))
         
         // Check if target is valid terrain (uses terrain system)
         const targetHeight = getTerrainHeight(sheep.targetX, sheep.targetZ)
@@ -1213,7 +1248,7 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
           const testHeight = getTerrainHeight(testX, testZ)
           // Use terrain system for validation
           if (isSheepZone(testHeight) && 
-              Math.abs(testX) < 250 && Math.abs(testZ) < 250) {
+              Math.abs(testX) < TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS && Math.abs(testZ) < TERRAIN_DIMENSIONS.SHEEP_MOVEMENT_BOUNDS) {
             sheep.targetX = testX
             sheep.targetZ = testZ
             foundValid = true
@@ -1354,8 +1389,8 @@ function Sheep() {
   const sheepData = useMemo(() => {
     const data = []
     for (let i = 0; i < 300; i++) {
-      const x = (Math.random() - 0.5) * 500
-      const z = (Math.random() - 0.5) * 500
+      const x = (Math.random() - 0.5) * TERRAIN_DIMENSIONS.SHEEP_SPAWN_SPREAD
+      const z = (Math.random() - 0.5) * TERRAIN_DIMENSIONS.SHEEP_SPAWN_SPREAD
       const height = getTerrainHeight(x, z)
       
       // Only place sheep in valid sheep zones (uses terrain system)
@@ -1485,8 +1520,8 @@ function Cloud({ initialX, initialY, initialZ, scale, speed }: {
     groupRef.current.position.x += speed * delta
     
     // Wrap around when cloud goes too far
-    if (groupRef.current.position.x > 700) {
-      groupRef.current.position.x = -700
+    if (groupRef.current.position.x > TERRAIN_DIMENSIONS.CLOUD_WRAP_DISTANCE) {
+      groupRef.current.position.x = -TERRAIN_DIMENSIONS.CLOUD_WRAP_DISTANCE
     }
   })
   
@@ -1517,9 +1552,9 @@ function Clouds() {
     // Create clouds spread across the sky
     for (let i = 0; i < 50; i++) {
       data.push({
-        x: (rng() - 0.5) * 1000 +750,
-        y: 150, // Height at 100
-        z: (rng() - 0.5) * 1000,
+        x: (rng() - 0.5) * TERRAIN_DIMENSIONS.CLOUD_SPREAD + TERRAIN_DIMENSIONS.CLOUD_WRAP_DISTANCE + 50,
+        y: TERRAIN_DIMENSIONS.CLOUD_HEIGHT,
+        z: (rng() - 0.5) * TERRAIN_DIMENSIONS.CLOUD_SPREAD,
         scale: 0.6 + rng() * 0.8,
         speed: 3 + rng() * 8, // Drift speed
       })
@@ -1548,8 +1583,8 @@ function Rocks() {
     const rockData = []
     const rng = seededRandom(98765) // Use seeded random for consistent rock placement
     for (let i = 0; i < 800; i++) {
-      const x = (rng() - 0.5) * 900
-      const z = (rng() - 0.5) * 900
+      const x = (rng() - 0.5) * TERRAIN_DIMENSIONS.ROCK_SPAWN_SPREAD
+      const z = (rng() - 0.5) * TERRAIN_DIMENSIONS.ROCK_SPAWN_SPREAD
       const height = getTerrainHeight(x, z)
       
       // Place rocks in valid rock zones (uses terrain system)
@@ -1614,7 +1649,7 @@ function Scene() {
       />
       
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['white', 0, 1500]} />
+      <fog attach="fog" args={['white', 0, TERRAIN_DIMENSIONS.FOG_FAR]} />
       
       {/* Lighting */}
       <ambientLight intensity={0.4} color="#87CEEB" />
@@ -1626,10 +1661,10 @@ function Scene() {
         shadow-mapSize-width={4096}
         shadow-mapSize-height={4096}
         shadow-camera-far={1000}
-        shadow-camera-left={-500}
-        shadow-camera-right={500}
-        shadow-camera-top={500}
-        shadow-camera-bottom={-500}
+        shadow-camera-left={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
+        shadow-camera-right={TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
+        shadow-camera-top={TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
+        shadow-camera-bottom={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
       />
       <hemisphereLight 
         args={['#87CEEB', '#3d5c3d', 0.6]} 
@@ -1653,7 +1688,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [500, 50, -175], fov: 60, near: 0.1, far: 2000 }}
+    camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
