@@ -1515,9 +1515,9 @@ function Clouds() {
     const rng = seededRandom(77777)
     
     // Create clouds spread across the sky
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 50; i++) {
       data.push({
-        x: (rng() - 0.5) * 1400,
+        x: (rng() - 0.5) * 1000 +750,
         y: 150, // Height at 100
         z: (rng() - 0.5) * 1000,
         scale: 0.6 + rng() * 0.8,
@@ -1653,7 +1653,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
   <Canvas 
 
     style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [300, 100, 250], fov: 60, near: 0.1, far: 2000 }}
+    camera={{ position: [500, 50, -175], fov: 60, near: 0.1, far: 2000 }}
     shadows
   >
     <Physics gravity={[0, -9.81, 0]}>
