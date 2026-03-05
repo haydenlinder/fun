@@ -1918,52 +1918,400 @@ function MobileControls() {
   )
 }
 
+// Day/Night cycle configuration
+const DAY_NIGHT_CYCLE = {
+  CYCLE_DURATION: 5 * 60, // 5 minutes in seconds
+  TRANSITION_DURATION: 30, // 30 seconds for smooth transition
+}
+
+// Moon component - giant moon that rises at night
+function Moon({ timeOfDay }: { timeOfDay: number }) {
+  const moonRef = useRef<THREE.Group>(null!)
+  
+  // Calculate moon progress with smooth transitions at edges
+  // timeOfDay: 0 = noon, 0.5 = midnight, 1 = noon
+  const { moonProgress, moonVisibility } = useMemo(() => {
+    // Core moon arc period: 0.25 to 0.75
+    // Transition zones: 0.2-0.25 (fade in) and 0.75-0.8 (fade out)
+    
+    let progress = 0
+    let visibility = 0
+    
+    if (timeOfDay >= 0.2 && timeOfDay <= 0.8) {
+      if (timeOfDay < 0.25) {
+        // Early transition - moon starting to rise
+        progress = 0
+        // Smooth fade in from 0.2 to 0.25
+        visibility = (timeOfDay - 0.2) / 0.05
+        // Apply smoothstep for even smoother transition
+        visibility = visibility * visibility * (3 - 2 * visibility)
+      } else if (timeOfDay > 0.75) {
+        // Late transition - moon setting
+        progress = 1
+        // Smooth fade out from 0.75 to 0.8
+        visibility = (0.8 - timeOfDay) / 0.05
+        // Apply smoothstep for even smoother transition
+        visibility = visibility * visibility * (3 - 2 * visibility)
+      } else {
+        // Main moon arc period
+        progress = (timeOfDay - 0.25) / 0.5
+        visibility = 1
+      }
+    }
+    
+    return { moonProgress: progress, moonVisibility: visibility }
+  }, [timeOfDay])
+  
+  // Moon arc across the sky
+  const moonPosition = useMemo(() => {
+    if (moonVisibility <= 0) {
+      return new THREE.Vector3(-800, -200, 0) // Below horizon
+    }
+    // Arc from east to west, peaking at midnight
+    const angle = moonProgress * Math.PI // 0 to PI
+    const height = Math.sin(angle) * 400 + 50 // Peak at 450, min at 50
+    const x = Math.cos(angle) * 600 // East to west
+    return new THREE.Vector3(x, height, -200)
+  }, [moonProgress, moonVisibility])
+  
+  // Moon opacity combines arc position and visibility transition
+  const moonOpacity = useMemo(() => {
+    // Base opacity from arc position (fade at horizon during main arc)
+    // Extended to 20% of arc for much smoother fade-in/out
+    let arcOpacity = 1
+    if (moonProgress <= 0.2) {
+      // Slow fade-in over 20% of the arc (about 30 seconds)
+      const t = moonProgress / 0.2
+      // Apply smoothstep for extra smooth transition
+      arcOpacity = t * t * (3 - 2 * t)
+    } else if (moonProgress >= 0.8) {
+      // Slow fade-out over 20% of the arc
+      const t = (1 - moonProgress) / 0.2
+      arcOpacity = t * t * (3 - 2 * t)
+    }
+    // Combine with visibility for smooth overall transition
+    return arcOpacity * moonVisibility
+  }, [moonProgress, moonVisibility])
+  
+  // Moon glow intensity based on height and visibility
+  // Uses visibility squared for extra-smooth light fade-in
+  const glowIntensity = useMemo(() => {
+    const heightFactor = Math.max(0, Math.sin(moonProgress * Math.PI))
+    // Apply additional smoothing using visibility for the light specifically
+    const smoothVisibility = moonVisibility * moonVisibility * moonVisibility // Cubic easing for very smooth transition
+    return heightFactor * moonOpacity * smoothVisibility
+  }, [moonProgress, moonOpacity, moonVisibility])
+  
+  if (moonVisibility <= 0) return null
+  
+  return (
+    <group ref={moonRef} position={moonPosition.toArray()}>
+      {/* Main moon sphere */}
+      <mesh>
+        <sphereGeometry args={[80, 32, 32]} />
+        <meshBasicMaterial 
+          color="#fffde7"
+          transparent
+          opacity={moonOpacity}
+        />
+      </mesh>
+      
+      {/* Moon surface details - darker patches (maria) */}
+      <mesh position={[-15, 20, 70]}>
+        <sphereGeometry args={[20, 16, 16]} />
+        <meshBasicMaterial 
+          color="#d4d4c4"
+          transparent
+          opacity={moonOpacity * 0.6}
+        />
+      </mesh>
+      <mesh position={[25, -10, 65]}>
+        <sphereGeometry args={[15, 16, 16]} />
+        <meshBasicMaterial 
+          color="#c8c8b8"
+          transparent
+          opacity={moonOpacity * 0.5}
+        />
+      </mesh>
+      <mesh position={[-30, -25, 60]}>
+        <sphereGeometry args={[18, 16, 16]} />
+        <meshBasicMaterial 
+          color="#d0d0c0"
+          transparent
+          opacity={moonOpacity * 0.55}
+        />
+      </mesh>
+      
+      {/* Moon glow - outer halo */}
+      <mesh>
+        <sphereGeometry args={[120, 32, 32]} />
+        <meshBasicMaterial 
+          color="#fffef0"
+          transparent
+          opacity={glowIntensity * 0.15}
+          side={THREE.BackSide}
+        />
+      </mesh>
+      
+      {/* Moon glow - inner halo */}
+      <mesh>
+        <sphereGeometry args={[95, 32, 32]} />
+        <meshBasicMaterial 
+          color="#fffff8"
+          transparent
+          opacity={glowIntensity * 0.25}
+          side={THREE.BackSide}
+        />
+      </mesh>
+      
+      {/* Moonlight - illuminates the scene at night */}
+      {/* Use squared intensity for extra-smooth fade-in, and always render to avoid shadow map pop-in */}
+      <pointLight 
+        color="#c4d4ff"
+        intensity={glowIntensity * glowIntensity * 10000}
+        distance={5000}
+        decay={1.5}
+        castShadow={glowIntensity > 0.1}
+        shadow-radius={8}
+        shadow-bias={-0.001}
+      />
+    </group>
+  )
+}
+
+// Stars that appear at night
+function Stars({ timeOfDay }: { timeOfDay: number }) {
+  const starsRef = useRef<THREE.Points>(null!)
+  
+  // Stars visible during night (timeOfDay 0.3 to 0.7)
+  const starOpacity = useMemo(() => {
+    if (timeOfDay < 0.2) return 0
+    if (timeOfDay < 0.35) return (timeOfDay - 0.2) / 0.15
+    if (timeOfDay > 0.8) return 0
+    if (timeOfDay > 0.65) return (0.8 - timeOfDay) / 0.15
+    return 1
+  }, [timeOfDay])
+  
+  const { positions, colors } = useMemo(() => {
+    const count = 2000
+    const positions = new Float32Array(count * 3)
+    const colors = new Float32Array(count * 3)
+    const rng = seededRandom(42424)
+    
+    for (let i = 0; i < count; i++) {
+      // Distribute stars on a large sphere
+      const theta = rng() * Math.PI * 2
+      const phi = Math.acos(2 * rng() - 1)
+      const radius = 800 + rng() * 100
+      
+      positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta)
+      positions[i * 3 + 1] = Math.abs(radius * Math.cos(phi)) + 100 // Only upper hemisphere
+      positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta)
+      
+      // Slight color variation (white to slight blue/yellow)
+      const colorVariation = rng()
+      if (colorVariation < 0.7) {
+        colors[i * 3] = 1
+        colors[i * 3 + 1] = 1
+        colors[i * 3 + 2] = 1
+      } else if (colorVariation < 0.85) {
+        colors[i * 3] = 0.8
+        colors[i * 3 + 1] = 0.9
+        colors[i * 3 + 2] = 1
+      } else {
+        colors[i * 3] = 1
+        colors[i * 3 + 1] = 0.95
+        colors[i * 3 + 2] = 0.8
+      }
+    }
+    
+    return { positions, colors }
+  }, [])
+  
+  // Twinkle effect
+  useFrame((state) => {
+    if (!starsRef.current) return
+    const material = starsRef.current.material as THREE.PointsMaterial
+    material.opacity = starOpacity * (0.8 + Math.sin(state.clock.elapsedTime * 0.5) * 0.2)
+  })
+  
+  if (starOpacity <= 0) return null
+  
+  return (
+    <points ref={starsRef}>
+      <bufferGeometry>
+        <bufferAttribute
+          attach="attributes-position"
+          args={[positions, 3]}
+        />
+        <bufferAttribute
+          attach="attributes-color"
+          args={[colors, 3]}
+        />
+      </bufferGeometry>
+      <pointsMaterial
+        size={2}
+        transparent
+        opacity={starOpacity}
+        vertexColors
+        sizeAttenuation={false}
+      />
+    </points>
+  )
+}
+
 function Scene() {
+  // Time of day: 0 = noon (brightest), 0.5 = midnight (darkest), 1 = noon
+  const [timeOfDay, setTimeOfDay] = useState(0)
+  
+  // Update time of day based on real time
+  useFrame((state) => {
+    const elapsed = state.clock.elapsedTime
+    // Complete cycle every CYCLE_DURATION seconds
+    const cycleProgress = (elapsed % DAY_NIGHT_CYCLE.CYCLE_DURATION) / DAY_NIGHT_CYCLE.CYCLE_DURATION
+    setTimeOfDay(cycleProgress + 0.1)
+  })
+  
+  // Calculate sun position based on time of day
+  const sunPosition = useMemo((): [number, number, number] => {
+    // Sun arc: rises in east, peaks at noon (timeOfDay=0), sets in west
+    // At timeOfDay=0 (noon): sun at peak
+    // At timeOfDay=0.25: sun setting (west)
+    // At timeOfDay=0.5 (midnight): sun below horizon
+    // At timeOfDay=0.75: sun rising (east)
+    const angle = timeOfDay * Math.PI * 2 // Full circle
+    const height = Math.cos(angle) * 300 // Peak at noon, lowest at midnight
+    const x = Math.sin(angle) * 400 // East-west movement
+    return [x, height, 100]
+  }, [timeOfDay])
+  
+  // Calculate lighting based on time of day with smooth interpolation
+  const lighting = useMemo(() => {
+    // 0 = noon (brightest), 0.5 = midnight (darkest)
+    const dayAmount = Math.cos(timeOfDay * Math.PI * 2) * 0.5 + 0.5 // 1 at noon, 0 at midnight
+    
+    // Helper function for smooth color interpolation
+    const lerpColor = (color1: [number, number, number], color2: [number, number, number], t: number): string => {
+      const r = Math.round(color1[0] + (color2[0] - color1[0]) * t)
+      const g = Math.round(color1[1] + (color2[1] - color1[1]) * t)
+      const b = Math.round(color1[2] + (color2[2] - color1[2]) * t)
+      return `rgb(${r}, ${g}, ${b})`
+    }
+    
+    // Smooth color transitions using dayAmount directly
+    // Day colors
+    const dayAmbient: [number, number, number] = [135, 206, 235] // hsl(197, 71%, 73%)
+    const nightAmbient: [number, number, number] = [50, 50, 50] // rgb(129, 137, 163)
+    
+    const daySunColor: [number, number, number] = [255, 248, 220] // #FFF8DC
+    const sunsetColor: [number, number, number] = [255, 179, 71] // #FFB347
+    const nightSunColor: [number, number, number] = [42, 48, 80] // #2a3050
+    
+    const dayHemisphereSky: [number, number, number] = [135, 206, 235] // #87CEEB
+    const nightHemisphereSky: [number, number, number] = [10, 16, 48] // #0a1030
+    
+    const dayHemisphereGround: [number, number, number] = [61, 92, 61] // #3d5c3d
+    const nightHemisphereGround: [number, number, number] = [26, 42, 26] // #1a2a1a
+    
+    const dayFog: [number, number, number] = [255, 255, 255] // white
+    const sunsetFog: [number, number, number] = [255, 153, 102] // #ff9966
+    const nightFog: [number, number, number] = [10, 16, 32] // #0a1020
+    
+    let directionalColor: string
+    if (dayAmount > 0.5) {
+      // Blend between day and sunset
+      const t = (dayAmount - 0.5) / 0.5 // 0 at 0.5, 1 at 1.0
+      directionalColor = lerpColor(sunsetColor, daySunColor, t)
+    } else if (dayAmount > 0.15) {
+      // Blend between night and sunset
+      const t = (dayAmount - 0.15) / 0.35 // 0 at 0.15, 1 at 0.5
+      directionalColor = lerpColor(nightSunColor, sunsetColor, t)
+    } else {
+      // Deep night
+      directionalColor = lerpColor(nightSunColor, nightSunColor, 1)
+    }
+    
+    // Fog color with sunset transition
+    let fogColor: string
+    if (dayAmount > 0.5) {
+      const t = (dayAmount - 0.5) / 0.5
+      fogColor = lerpColor(sunsetFog, dayFog, t)
+    } else if (dayAmount > 0.15) {
+      const t = (dayAmount - 0.15) / 0.35
+      fogColor = lerpColor(nightFog, sunsetFog, t)
+    } else {
+      fogColor = lerpColor(nightFog, nightFog, 1)
+    }
+    
+    return {
+      ambientIntensity: 1,
+      ambientColor: lerpColor(nightAmbient, dayAmbient, dayAmount),
+      directionalIntensity: Math.max(0.1, dayAmount * 1.5),
+      directionalColor,
+      hemisphereIntensity: 0.2 + dayAmount * 0.5,
+      hemisphereSkyColor: lerpColor(nightHemisphereSky, dayHemisphereSky, dayAmount),
+      hemisphereGroundColor: lerpColor(nightHemisphereGround, dayHemisphereGround, dayAmount),
+      fogColor,
+    }
+  }, [timeOfDay])
+  
+  // Sky parameters based on time of day with smooth interpolation
+  const skyParams = useMemo(() => {
+    const dayAmount = Math.cos(timeOfDay * Math.PI * 2) * 0.5 + 0.5
+    
+    // Smooth interpolation for sky parameters
+    // Use smoothstep-like curve for more natural transition
+    const smoothDayAmount = dayAmount * dayAmount * (3 - 2 * dayAmount)
+    
+    return {
+      turbidity: 0.1 + smoothDayAmount * 9.9, // 0.1 to 10
+      rayleigh: 0.1 + smoothDayAmount * 1.9, // 0.1 to 2
+      mieCoefficient: 0.001 + smoothDayAmount * 0.004, // 0.001 to 0.005
+      mieDirectionalG: 0.999 - smoothDayAmount * 0.899, // 0.999 to 0.1
+    }
+  }, [timeOfDay])
+  
   return (
     <>
       {/* Player */}
       <PlayerSphere />
       
-      {/* Camera Controls - disabled since camera follows player */}
-      {/* <MapControls 
-        makeDefault
-        maxPolarAngle={1.55}
-        minDistance={50}
-        maxDistance={1500}
-      /> */}
-      
       {/* Sky */}
       <Sky 
         distance={1000}
-        sunPosition={[100, 20, 100]}
-        inclination={0.6}
-        azimuth={0.25}
-        turbidity={10}
-        rayleigh={2}
-        mieCoefficient={0.005}
-        mieDirectionalG={0.1}
+        sunPosition={sunPosition}
+        turbidity={skyParams.turbidity}
+        rayleigh={skyParams.rayleigh}
+        mieCoefficient={skyParams.mieCoefficient}
+        mieDirectionalG={skyParams.mieDirectionalG}
       />
       
+      {/* Night sky elements */}
+      <Stars timeOfDay={timeOfDay} />
+      <Moon timeOfDay={timeOfDay} />
+      
       {/* Fog for atmosphere */}
-      <fog attach="fog" args={['white', 0, TERRAIN_DIMENSIONS.FOG_FAR]} />
+      <fog attach="fog" args={[lighting.fogColor, 0, TERRAIN_DIMENSIONS.FOG_FAR]} />
       
       {/* Lighting */}
-      <ambientLight intensity={0.4} color="#87CEEB" />
+      <ambientLight intensity={lighting.ambientIntensity} color={lighting.ambientColor} />
       <directionalLight 
-        position={[200, 300, 200]} 
-        intensity={1.5}
-        color="#FFF8DC"
+        position={sunPosition}
+        intensity={lighting.directionalIntensity}
+        color={lighting.directionalColor}
         castShadow
+                shadow-radius={4}
+
         shadow-mapSize-width={4096}
         shadow-mapSize-height={4096}
-        shadow-camera-far={1000}
+        shadow-camera-far={3000}
         shadow-camera-left={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
         shadow-camera-right={TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
         shadow-camera-top={TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
         shadow-camera-bottom={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
       />
       <hemisphereLight 
-        args={['#87CEEB', '#3d5c3d', 0.6]} 
+        args={[lighting.hemisphereSkyColor, lighting.hemisphereGroundColor, lighting.hemisphereIntensity]} 
       />
       
       {/* Landscape Elements */}
@@ -1999,7 +2347,7 @@ createRoot(document.getElementById('root') as HTMLElement).render(
       <Canvas 
         style={{ width: "100vw", height: "100vh" }}
         camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
-        shadows
+        shadows="soft"
       >
         <Physics gravity={[0, -150, 0]}>
           <Scene />
