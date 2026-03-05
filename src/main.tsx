@@ -1641,6 +1641,7 @@ const mobileInput = {
   moveY: 0,
   cameraX: 0,
   cameraY: 0,
+  jump: false,
 }
 
 // Player sphere with keyboard controls (drei) and mobile touch support
@@ -1711,8 +1712,8 @@ function PlayerSphere() {
       )
     }
     
-    // Jump
-    if (jump) {
+    // Jump (keyboard or mobile button)
+    if (jump || mobileInput.jump) {
       const vel = rigidBodyRef.current.linvel()
       if (Math.abs(vel.y) < 0.5) {
         rigidBodyRef.current.applyImpulse({ x: 0, y: jumpForce, z: 0 }, true)
@@ -1868,11 +1869,10 @@ function MobileControls() {
       {/* Jump button */}
       <button
         onTouchStart={() => { 
-          // Trigger jump via a custom event or direct state
-          window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
+          mobileInput.jump = true
         }}
         onTouchEnd={() => {
-          window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
+          mobileInput.jump = false
         }}
         style={{
           position: 'fixed',
