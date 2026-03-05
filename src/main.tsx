@@ -1594,7 +1594,7 @@ function DestructibleTypeScriptBlock({ x, y, z, scale }: { x: number, y: number,
   }
   
   return (
-    <group position={[x, y, z]} rotation={[0,0,0]} scale={scale} onClick={handleClick}>
+    <group position={[x, y, z]} rotation={[0,Math.PI/4,0]} scale={scale} onClick={handleClick}>
       {/* Main blue cube with rounded edges using drei RoundedBox */}
       <RoundedBox args={[2, 2, 2]} radius={0.15} smoothness={4} castShadow receiveShadow>
         <meshStandardMaterial 
@@ -2440,9 +2440,9 @@ function Scene() {
       
       {/* TypeScript Block - destructible */}
       <DestructibleTypeScriptBlock 
-        x={0} 
-        y={getTerrainHeight(0, -180) + 5} 
-        z={-180} 
+        x={350} 
+        y={getTerrainHeight(350, -50) + 5} 
+        z={-50} 
         scale={8} 
       />
       
