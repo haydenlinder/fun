@@ -1,12 +1,25 @@
 import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
-import { useRef, useMemo, useEffect, useState, useCallback } from 'react'
+import { useRef, useMemo, useEffect, useState, useCallback, createContext, useContext } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { KeyboardControls, useKeyboardControls, Sky } from '@react-three/drei'
+import { KeyboardControls, useKeyboardControls, Sky, MapControls } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
 import "./App.css"
+
+// Control mode context - shared between components
+type ControlMode = 'player' | 'map'
+const ControlModeContext = createContext<{
+  mode: ControlMode
+  setMode: (mode: ControlMode) => void
+}>({ mode: 'player', setMode: () => {} })
+
+// Global control mode state (for components outside context)
+const controlModeState = {
+  mode: 'player' as ControlMode,
+  setMode: (mode: ControlMode) => { controlModeState.mode = mode }
+}
 
 
 // Simple seeded random number generator for consistent terrain
@@ -572,6 +585,7 @@ function Trees() {
 
 
 // Fragment component with physics - used for destruction debris
+// OPTIMIZED: Uses refs instead of state for opacity to avoid re-renders
 function Fragment({ 
   fragment
 }: { 
@@ -588,7 +602,8 @@ function Fragment({
     (Math.random() - 0.5) * 10,
     (Math.random() - 0.5) * 10
   ))
-  const [opacity, setOpacity] = useState(1)
+  const opacityRef = useRef(1)
+  const isDeadRef = useRef(false)
   const startTime = useRef(0)
   
   // Store the initial position from the fragment
@@ -615,7 +630,7 @@ function Fragment({
   }, [fragment])
   
   useFrame((state, delta) => {
-    if (!meshRef.current || opacity <= 0) return
+    if (!meshRef.current || isDeadRef.current) return
     
     if (startTime.current === 0) {
       startTime.current = state.clock.elapsedTime
@@ -646,14 +661,26 @@ function Fragment({
       angularVelRef.current.multiplyScalar(0.8)
     }
     
-    // Fade out after 2 seconds
+    // Fade out after 2 seconds - update material opacity directly without re-render
     if (elapsed > 2) {
       const fadeProgress = (elapsed - 2) / 2
-      setOpacity(Math.max(0, 1 - fadeProgress))
+      opacityRef.current = Math.max(0, 1 - fadeProgress)
+      
+      // Update material opacity directly
+      const material = meshRef.current.material as THREE.Material | THREE.Material[]
+      if (Array.isArray(material)) {
+        material.forEach(m => { (m as any).opacity = opacityRef.current })
+      } else {
+        (material as any).opacity = opacityRef.current
+      }
+      
+      // Mark as dead and hide when fully faded
+      if (opacityRef.current <= 0) {
+        isDeadRef.current = true
+        meshRef.current.visible = false
+      }
     }
   })
-  
-  if (opacity <= 0) return null
   
   return (
     <primitive 
@@ -689,10 +716,18 @@ interface LaserData {
   createdAt: number
 }
 
+// OPTIMIZED: LaserBeam uses refs for opacity to avoid re-renders
 function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE.Vector3, createdAt: number }) {
+  const groupRef = useRef<THREE.Group>(null!)
   const meshRef = useRef<THREE.Mesh>(null!)
   const glowRef = useRef<THREE.Mesh>(null!)
-  const [opacity, setOpacity] = useState(1)
+  const impactRef = useRef<THREE.Mesh>(null!)
+  const originRef = useRef<THREE.Mesh>(null!)
+  const light1Ref = useRef<THREE.PointLight>(null!)
+  const light2Ref = useRef<THREE.PointLight>(null!)
+  const light3Ref = useRef<THREE.PointLight>(null!)
+  const opacityRef = useRef(1)
+  const isDeadRef = useRef(false)
   
   // Calculate beam geometry
   const { midpoint, length, rotation } = useMemo(() => {
@@ -710,48 +745,66 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   }, [start, end])
   
   useFrame((state) => {
+    if (isDeadRef.current) return
+    
     const elapsed = state.clock.elapsedTime * 1000 - createdAt
     const duration = 500 
     
     if (elapsed > duration) {
-      setOpacity(0)
+      opacityRef.current = 0
+      isDeadRef.current = true
+      if (groupRef.current) groupRef.current.visible = false
     } else {
       // Quick fade in, then fade out
       const fadeIn = Math.min(1, elapsed / 30)
       const fadeOut = Math.max(0, 1 - (elapsed - duration * 0.6) / (duration * 0.4))
-      setOpacity(fadeIn * fadeOut)
+      opacityRef.current = fadeIn * fadeOut
       
+      // Update materials directly without re-render
+      if (meshRef.current) {
+        (meshRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current
+      }
+      if (glowRef.current) {
+        (glowRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.4
+      }
+      if (impactRef.current) {
+        (impactRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.8
+      }
+      if (originRef.current) {
+        (originRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.8
+      }
+      if (light1Ref.current) light1Ref.current.intensity = opacityRef.current * 1000
+      if (light2Ref.current) light2Ref.current.intensity = opacityRef.current * 1000
+      if (light3Ref.current) light3Ref.current.intensity = opacityRef.current * 1000
     }
   })
   
-  if (opacity <= 0) return null
-  
   return (
-    <group position={midpoint} rotation={rotation}>
+    <group ref={groupRef} position={midpoint} rotation={rotation}>
       {/* Light emission from impact point */}
       <pointLight 
+        ref={light1Ref}
         position={[0, length / 2, 0]} 
         color="#ff6a00" 
-        intensity={opacity * 1000}
-        castShadow
+        intensity={1000}
         distance={300}
         decay={2}
       />
       {/* Light emission from origin point */}
       <pointLight 
+        ref={light2Ref}
         position={[0, -length / 2, 0]} 
         color="#ffe600" 
-        castShadow
-        intensity={opacity * 1000}
+        intensity={1000}
         distance={200}
         decay={2}
       />
       {/* Light emission along the beam */}
       <pointLight 
-      castShadow
+        ref={light3Ref}
         position={[0, 0, 0]} 
         color="#ff4400" 
-        intensity={opacity * 1000}
+        intensity={1000}
         distance={200}
         decay={2}
       />
@@ -761,7 +814,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ff0000" 
           transparent 
-          opacity={opacity}
+          opacity={1}
         />
       </mesh>
       {/* Outer glow */}
@@ -770,25 +823,25 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ffb444" 
           transparent 
-          opacity={opacity * 0.4}
+          opacity={0.4}
         />
       </mesh>
       {/* Impact point glow */}
-      <mesh position={[0, length / 2, 0]}>
+      <mesh ref={impactRef} position={[0, length / 2, 0]}>
         <sphereGeometry args={[1, 16, 16]} />
         <meshBasicMaterial 
           color="#ff6a00" 
           transparent 
-          opacity={opacity * 0.8}
+          opacity={0.8}
         />
       </mesh>
       {/* Origin point glow */}
-      <mesh position={[0, -length / 2, 0]}>
+      <mesh ref={originRef} position={[0, -length / 2, 0]}>
         <sphereGeometry args={[.2, 16, 16]} />
         <meshBasicMaterial 
           color="#ffe600" 
           transparent 
-          opacity={opacity * 0.8}
+          opacity={0.8}
         />
       </mesh>
     </group>
@@ -950,6 +1003,7 @@ function LaserSystem() {
   const nextLaserId = useRef(0)
   const lastFireTime = useRef(0)
   const raycaster = useMemo(() => new THREE.Raycaster(), [])
+  const { mode } = useContext(ControlModeContext)
   
   // Track mouse movement to distinguish clicks from drags (OrbitControls)
   const mouseDownPos = useRef<{ x: number, y: number } | null>(null)
@@ -966,9 +1020,11 @@ function LaserSystem() {
         const dx = event.clientX - mouseDownPos.current.x
         const dy = event.clientY - mouseDownPos.current.y
         const distance = Math.sqrt(dx * dx + dy * dy)
-        // If mouse moved more than 5 pixels, consider it a drag
+        // If mouse moved more than 5 pixels, consider it a drag - switch to map mode
         if (distance > 5) {
           isDragging.current = true
+          // Switch to map mode when dragging
+          controlModeState.setMode('map')
         }
       }
     }
@@ -978,9 +1034,14 @@ function LaserSystem() {
     }
     
     const handleClick = (event: MouseEvent) => {
-      // Don't fire if user was dragging (using OrbitControls)
+      // Don't fire if user was dragging (using MapControls)
       if (isDragging.current) {
         isDragging.current = false
+        return
+      }
+      
+      // Don't fire lasers in map mode
+      if (controlModeState.mode === 'map') {
         return
       }
       
@@ -1038,7 +1099,7 @@ function LaserSystem() {
       gl.domElement.removeEventListener('mouseup', handleMouseUp)
       gl.domElement.removeEventListener('click', handleClick)
     }
-  }, [camera, scene, gl, raycaster])
+  }, [camera, scene, gl, raycaster, mode])
   
   return (
     <>
@@ -1664,6 +1725,7 @@ const playerPosition = {
 function PlayerSphere() {
   const rigidBodyRef = useRef<RapierRigidBody>(null!)
   const { camera } = useThree()
+  const { mode } = useContext(ControlModeContext)
   
   // Get keyboard state from drei's KeyboardControls
   const [, getKeys] = useKeyboardControls()
@@ -1684,11 +1746,14 @@ function PlayerSphere() {
     // Get keyboard state
     const { forward, backward, left, right, jump, turnLeft, turnRight, lookUp, lookDown } = getKeys()
     
-    // Handle camera rotation (keyboard + mobile)
-    if (turnLeft || mobileInput.cameraX < -0.2) cameraAngle.current += turnSpeed * delta
-    if (turnRight || mobileInput.cameraX > 0.2) cameraAngle.current -= turnSpeed * delta
-    if (lookUp || mobileInput.cameraY < -0.2) cameraPitch.current = Math.max(0.1, cameraPitch.current - pitchSpeed * delta)
-    if (lookDown || mobileInput.cameraY > 0.2) cameraPitch.current = Math.min(1.2, cameraPitch.current + pitchSpeed * delta)
+    // Only process player controls and camera following in player mode
+    if (controlModeState.mode === 'player') {
+      // Handle camera rotation (keyboard + mobile)
+      if (turnLeft || mobileInput.cameraX < -0.2) cameraAngle.current += turnSpeed * delta
+      if (turnRight || mobileInput.cameraX > 0.2) cameraAngle.current -= turnSpeed * delta
+      if (lookUp || mobileInput.cameraY < -0.2) cameraPitch.current = Math.max(0.1, cameraPitch.current - pitchSpeed * delta)
+      if (lookDown || mobileInput.cameraY > 0.2) cameraPitch.current = Math.min(1.2, cameraPitch.current + pitchSpeed * delta)
+    }
     
     // Get camera direction for relative movement
     const cameraDirection = new THREE.Vector3(
@@ -1701,23 +1766,25 @@ function PlayerSphere() {
     const rightVector = new THREE.Vector3()
     rightVector.crossVectors(cameraDirection, new THREE.Vector3(0, 1, 0)).normalize()
     
-    // Calculate movement direction (keyboard + mobile joystick)
+    // Calculate movement direction (keyboard + mobile joystick) - only in player mode
     const moveDirection = new THREE.Vector3()
     
-    // Keyboard input
-    if (forward) moveDirection.add(cameraDirection)
-    if (backward) moveDirection.sub(cameraDirection)
-    if (left) moveDirection.sub(rightVector)
-    if (right) moveDirection.add(rightVector)
-    
-    // Mobile joystick input
-    if (Math.abs(mobileInput.moveY) > 0.1) {
-      const forwardAmount = cameraDirection.clone().multiplyScalar(-mobileInput.moveY)
-      moveDirection.add(forwardAmount)
-    }
-    if (Math.abs(mobileInput.moveX) > 0.1) {
-      const rightAmount = rightVector.clone().multiplyScalar(mobileInput.moveX)
-      moveDirection.add(rightAmount)
+    if (controlModeState.mode === 'player') {
+      // Keyboard input
+      if (forward) moveDirection.add(cameraDirection)
+      if (backward) moveDirection.sub(cameraDirection)
+      if (left) moveDirection.sub(rightVector)
+      if (right) moveDirection.add(rightVector)
+      
+      // Mobile joystick input
+      if (Math.abs(mobileInput.moveY) > 0.1) {
+        const forwardAmount = cameraDirection.clone().multiplyScalar(-mobileInput.moveY)
+        moveDirection.add(forwardAmount)
+      }
+      if (Math.abs(mobileInput.moveX) > 0.1) {
+        const rightAmount = rightVector.clone().multiplyScalar(mobileInput.moveX)
+        moveDirection.add(rightAmount)
+      }
     }
     
     if (moveDirection.length() > 0) {
@@ -1728,32 +1795,33 @@ function PlayerSphere() {
       )
     }
     
-    // Jump (keyboard or mobile button)
-    if (jump || mobileInput.jump) {
+    // Jump (keyboard or mobile button) - only in player mode
+    if (controlModeState.mode === 'player' && (jump || mobileInput.jump)) {
       const vel = rigidBodyRef.current.linvel()
       if (Math.abs(vel.y) < 0.5) {
         rigidBodyRef.current.applyImpulse({ x: 0, y: jumpForce, z: 0 }, true)
       }
     }
     
-    // Update camera position and shared player position
-    const pos = rigidBodyRef.current.translation()
-    
     // Update shared player position for laser system
+    const pos = rigidBodyRef.current.translation()
     playerPosition.x = pos.x
     playerPosition.y = pos.y
     playerPosition.z = pos.z
     
-    const heightOffset = Math.sin(cameraPitch.current) * cameraDistance.current
-    const horizontalDist = Math.cos(cameraPitch.current) * cameraDistance.current
-    
-    const targetCameraPos = new THREE.Vector3(
-      pos.x + Math.sin(cameraAngle.current) * horizontalDist,
-      pos.y + heightOffset,
-      pos.z + Math.cos(cameraAngle.current) * horizontalDist
-    )
-    camera.position.lerp(targetCameraPos, 0.08)
-    camera.lookAt(pos.x, pos.y, pos.z)
+    // Only follow player with camera in player mode
+    if (controlModeState.mode === 'player') {
+      const heightOffset = Math.sin(cameraPitch.current) * cameraDistance.current
+      const horizontalDist = Math.cos(cameraPitch.current) * cameraDistance.current
+      
+      const targetCameraPos = new THREE.Vector3(
+        pos.x + Math.sin(cameraAngle.current) * horizontalDist,
+        pos.y + heightOffset,
+        pos.z + Math.cos(cameraAngle.current) * horizontalDist
+      )
+      camera.position.lerp(targetCameraPos, 0.08)
+      camera.lookAt(pos.x, pos.y, pos.z)
+    }
   })
   
   const startX = 0
@@ -2160,150 +2228,285 @@ function Stars({ timeOfDay }: { timeOfDay: number }) {
   )
 }
 
-function Scene() {
-  // Time of day: 0 = noon (brightest), 0.5 = midnight (darkest), 1 = noon
-  const [timeOfDay, setTimeOfDay] = useState(0)
+// OPTIMIZED: Dynamic stars that read from timeOfDayRef without re-renders
+function DynamicStars({ timeOfDayRef }: { timeOfDayRef: React.MutableRefObject<number> }) {
+  const starsRef = useRef<THREE.Points>(null!)
+  const isVisibleRef = useRef(false)
   
-  // Update time of day based on real time
+  const { positions, colors } = useMemo(() => {
+    const count = 2000
+    const positions = new Float32Array(count * 3)
+    const colors = new Float32Array(count * 3)
+    const rng = seededRandom(42424)
+    
+    for (let i = 0; i < count; i++) {
+      const theta = rng() * Math.PI * 2
+      const phi = Math.acos(2 * rng() - 1)
+      const radius = 800 + rng() * 100
+      
+      positions[i * 3] = radius * Math.sin(phi) * Math.cos(theta)
+      positions[i * 3 + 1] = Math.abs(radius * Math.cos(phi)) + 100
+      positions[i * 3 + 2] = radius * Math.sin(phi) * Math.sin(theta)
+      
+      const colorVariation = rng()
+      if (colorVariation < 0.7) {
+        colors[i * 3] = 1; colors[i * 3 + 1] = 1; colors[i * 3 + 2] = 1
+      } else if (colorVariation < 0.85) {
+        colors[i * 3] = 0.8; colors[i * 3 + 1] = 0.9; colors[i * 3 + 2] = 1
+      } else {
+        colors[i * 3] = 1; colors[i * 3 + 1] = 0.95; colors[i * 3 + 2] = 0.8
+      }
+    }
+    return { positions, colors }
+  }, [])
+  
   useFrame((state) => {
-    const elapsed = state.clock.elapsedTime
-    // Complete cycle every CYCLE_DURATION seconds
-    const cycleProgress = (elapsed % DAY_NIGHT_CYCLE.CYCLE_DURATION) / DAY_NIGHT_CYCLE.CYCLE_DURATION
-    setTimeOfDay(cycleProgress + 0.1)
+    if (!starsRef.current) return
+    
+    const timeOfDay = timeOfDayRef.current
+    let starOpacity = 0
+    if (timeOfDay >= 0.2 && timeOfDay <= 0.8) {
+      if (timeOfDay < 0.35) starOpacity = (timeOfDay - 0.2) / 0.15
+      else if (timeOfDay > 0.65) starOpacity = (0.8 - timeOfDay) / 0.15
+      else starOpacity = 1
+    }
+    
+    const shouldBeVisible = starOpacity > 0
+    if (shouldBeVisible !== isVisibleRef.current) {
+      starsRef.current.visible = shouldBeVisible
+      isVisibleRef.current = shouldBeVisible
+    }
+    
+    if (shouldBeVisible) {
+      const material = starsRef.current.material as THREE.PointsMaterial
+      material.opacity = starOpacity * (0.8 + Math.sin(state.clock.elapsedTime * 0.5) * 0.2)
+    }
   })
   
-  // Calculate sun position based on time of day
-  const sunPosition = useMemo((): [number, number, number] => {
-    // Sun arc: rises in east, peaks at noon (timeOfDay=0), sets in west
-    // At timeOfDay=0 (noon): sun at peak
-    // At timeOfDay=0.25: sun setting (west)
-    // At timeOfDay=0.5 (midnight): sun below horizon
-    // At timeOfDay=0.75: sun rising (east)
-    const angle = timeOfDay * Math.PI * 2 // Full circle
-    const height = Math.cos(angle) * 300 // Peak at noon, lowest at midnight
-    const x = Math.sin(angle) * 400 // East-west movement
-    return [x, height, 100]
-  }, [timeOfDay])
+  return (
+    <points ref={starsRef} visible={false}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-color" args={[colors, 3]} />
+      </bufferGeometry>
+      <pointsMaterial size={2} transparent opacity={0} vertexColors sizeAttenuation={false} />
+    </points>
+  )
+}
+
+// OPTIMIZED: Dynamic moon that reads from timeOfDayRef without re-renders
+function DynamicMoon({ timeOfDayRef }: { timeOfDayRef: React.MutableRefObject<number> }) {
+  const groupRef = useRef<THREE.Group>(null!)
+  const mainMoonRef = useRef<THREE.Mesh>(null!)
+  const patch1Ref = useRef<THREE.Mesh>(null!)
+  const patch2Ref = useRef<THREE.Mesh>(null!)
+  const patch3Ref = useRef<THREE.Mesh>(null!)
+  const outerGlowRef = useRef<THREE.Mesh>(null!)
+  const innerGlowRef = useRef<THREE.Mesh>(null!)
+  const moonLightRef = useRef<THREE.PointLight>(null!)
+  const isVisibleRef = useRef(false)
   
-  // Calculate lighting based on time of day with smooth interpolation
-  const lighting = useMemo(() => {
-    // 0 = noon (brightest), 0.5 = midnight (darkest)
-    const dayAmount = Math.cos(timeOfDay * Math.PI * 2) * 0.5 + 0.5 // 1 at noon, 0 at midnight
+  useFrame(() => {
+    if (!groupRef.current) return
     
-    // Helper function for smooth color interpolation
-    const lerpColor = (color1: [number, number, number], color2: [number, number, number], t: number): string => {
-      const r = Math.round(color1[0] + (color2[0] - color1[0]) * t)
-      const g = Math.round(color1[1] + (color2[1] - color1[1]) * t)
-      const b = Math.round(color1[2] + (color2[2] - color1[2]) * t)
-      return `rgb(${r}, ${g}, ${b})`
+    const timeOfDay = timeOfDayRef.current
+    
+    // Calculate visibility and progress
+    let moonProgress = 0
+    let moonVisibility = 0
+    
+    if (timeOfDay >= 0.2 && timeOfDay <= 0.8) {
+      if (timeOfDay < 0.25) {
+        moonProgress = 0
+        moonVisibility = (timeOfDay - 0.2) / 0.05
+        moonVisibility = moonVisibility * moonVisibility * (3 - 2 * moonVisibility)
+      } else if (timeOfDay > 0.75) {
+        moonProgress = 1
+        moonVisibility = (0.8 - timeOfDay) / 0.05
+        moonVisibility = moonVisibility * moonVisibility * (3 - 2 * moonVisibility)
+      } else {
+        moonProgress = (timeOfDay - 0.25) / 0.5
+        moonVisibility = 1
+      }
     }
     
-    // Smooth color transitions using dayAmount directly
-    // Day colors
-    const dayAmbient: [number, number, number] = [135, 206, 235] // hsl(197, 71%, 73%)
-    const nightAmbient: [number, number, number] = [50, 50, 50] // rgb(129, 137, 163)
-    
-    const daySunColor: [number, number, number] = [255, 248, 220] // #FFF8DC
-    const sunsetColor: [number, number, number] = [255, 179, 71] // #FFB347
-    const nightSunColor: [number, number, number] = [42, 48, 80] // #2a3050
-    
-    const dayHemisphereSky: [number, number, number] = [135, 206, 235] // #87CEEB
-    const nightHemisphereSky: [number, number, number] = [10, 16, 48] // #0a1030
-    
-    const dayHemisphereGround: [number, number, number] = [61, 92, 61] // #3d5c3d
-    const nightHemisphereGround: [number, number, number] = [26, 42, 26] // #1a2a1a
-    
-    const dayFog: [number, number, number] = [255, 255, 255] // white
-    const sunsetFog: [number, number, number] = [255, 153, 102] // #ff9966
-    const nightFog: [number, number, number] = [10, 16, 32] // #0a1020
-    
-    let directionalColor: string
-    if (dayAmount > 0.5) {
-      // Blend between day and sunset
-      const t = (dayAmount - 0.5) / 0.5 // 0 at 0.5, 1 at 1.0
-      directionalColor = lerpColor(sunsetColor, daySunColor, t)
-    } else if (dayAmount > 0.15) {
-      // Blend between night and sunset
-      const t = (dayAmount - 0.15) / 0.35 // 0 at 0.15, 1 at 0.5
-      directionalColor = lerpColor(nightSunColor, sunsetColor, t)
-    } else {
-      // Deep night
-      directionalColor = lerpColor(nightSunColor, nightSunColor, 1)
+    const shouldBeVisible = moonVisibility > 0
+    if (shouldBeVisible !== isVisibleRef.current) {
+      groupRef.current.visible = shouldBeVisible
+      isVisibleRef.current = shouldBeVisible
     }
     
-    // Fog color with sunset transition
-    let fogColor: string
-    if (dayAmount > 0.5) {
-      const t = (dayAmount - 0.5) / 0.5
-      fogColor = lerpColor(sunsetFog, dayFog, t)
-    } else if (dayAmount > 0.15) {
-      const t = (dayAmount - 0.15) / 0.35
-      fogColor = lerpColor(nightFog, sunsetFog, t)
-    } else {
-      fogColor = lerpColor(nightFog, nightFog, 1)
-    }
+    if (!shouldBeVisible) return
     
-    return {
-      ambientIntensity: 1,
-      ambientColor: lerpColor(nightAmbient, dayAmbient, dayAmount),
-      directionalIntensity: Math.max(0.1, dayAmount * 1.5),
-      directionalColor,
-      hemisphereIntensity: 0.2 + dayAmount * 0.5,
-      hemisphereSkyColor: lerpColor(nightHemisphereSky, dayHemisphereSky, dayAmount),
-      hemisphereGroundColor: lerpColor(nightHemisphereGround, dayHemisphereGround, dayAmount),
-      fogColor,
+    // Update position
+    const angle = moonProgress * Math.PI
+    const height = Math.sin(angle) * 400 + 50
+    const x = Math.cos(angle) * 600
+    groupRef.current.position.set(x, height, -200)
+    
+    // Calculate opacity
+    let arcOpacity = 1
+    if (moonProgress <= 0.2) {
+      const t = moonProgress / 0.2
+      arcOpacity = t * t * (3 - 2 * t)
+    } else if (moonProgress >= 0.8) {
+      const t = (1 - moonProgress) / 0.2
+      arcOpacity = t * t * (3 - 2 * t)
     }
-  }, [timeOfDay])
+    const moonOpacity = arcOpacity * moonVisibility
+    
+    // Calculate glow intensity
+    const heightFactor = Math.max(0, Math.sin(moonProgress * Math.PI))
+    const smoothVisibility = moonVisibility * moonVisibility * moonVisibility
+    const glowIntensity = heightFactor * moonOpacity * smoothVisibility
+    
+    // Update materials directly
+    if (mainMoonRef.current) (mainMoonRef.current.material as THREE.MeshBasicMaterial).opacity = moonOpacity
+    if (patch1Ref.current) (patch1Ref.current.material as THREE.MeshBasicMaterial).opacity = moonOpacity * 0.6
+    if (patch2Ref.current) (patch2Ref.current.material as THREE.MeshBasicMaterial).opacity = moonOpacity * 0.5
+    if (patch3Ref.current) (patch3Ref.current.material as THREE.MeshBasicMaterial).opacity = moonOpacity * 0.55
+    if (outerGlowRef.current) (outerGlowRef.current.material as THREE.MeshBasicMaterial).opacity = glowIntensity * 0.15
+    if (innerGlowRef.current) (innerGlowRef.current.material as THREE.MeshBasicMaterial).opacity = glowIntensity * 0.25
+    if (moonLightRef.current) {
+      moonLightRef.current.intensity = glowIntensity * glowIntensity * 10000
+      moonLightRef.current.castShadow = glowIntensity > 0.1
+    }
+  })
   
-  // Sky parameters based on time of day with smooth interpolation
-  const skyParams = useMemo(() => {
+  return (
+    <group ref={groupRef} visible={false}>
+      <mesh ref={mainMoonRef}>
+        <sphereGeometry args={[80, 32, 32]} />
+        <meshBasicMaterial color="#fffde7" transparent opacity={0} />
+      </mesh>
+      <mesh ref={patch1Ref} position={[-15, 20, 70]}>
+        <sphereGeometry args={[20, 16, 16]} />
+        <meshBasicMaterial color="#d4d4c4" transparent opacity={0} />
+      </mesh>
+      <mesh ref={patch2Ref} position={[25, -10, 65]}>
+        <sphereGeometry args={[15, 16, 16]} />
+        <meshBasicMaterial color="#c8c8b8" transparent opacity={0} />
+      </mesh>
+      <mesh ref={patch3Ref} position={[-30, -25, 60]}>
+        <sphereGeometry args={[18, 16, 16]} />
+        <meshBasicMaterial color="#d0d0c0" transparent opacity={0} />
+      </mesh>
+      <mesh ref={outerGlowRef}>
+        <sphereGeometry args={[120, 32, 32]} />
+        <meshBasicMaterial color="#fffef0" transparent opacity={0} side={THREE.BackSide} />
+      </mesh>
+      <mesh ref={innerGlowRef}>
+        <sphereGeometry args={[95, 32, 32]} />
+        <meshBasicMaterial color="#fffff8" transparent opacity={0} side={THREE.BackSide} />
+      </mesh>
+      <pointLight 
+        ref={moonLightRef}
+        color="#c4d4ff"
+        intensity={0}
+        distance={5000}
+        decay={1.5}
+        shadow-radius={8}
+        shadow-bias={-0.001}
+      />
+    </group>
+  )
+}
+
+// OPTIMIZED: Dynamic lighting component that updates lights directly without re-renders
+function DynamicLighting({ timeOfDayRef }: { timeOfDayRef: React.MutableRefObject<number> }) {
+  const sunRef = useRef<THREE.DirectionalLight>(null!)
+  const ambientRef = useRef<THREE.AmbientLight>(null!)
+  const hemisphereRef = useRef<THREE.HemisphereLight>(null!)
+  const fogRef = useRef<THREE.Fog>(null!)
+  const { scene } = useThree()
+  
+  // Color arrays for interpolation (pre-computed)
+  const dayAmbient = useMemo(() => new THREE.Color(135/255, 206/255, 235/255), [])
+  const nightAmbient = useMemo(() => new THREE.Color(50/255, 50/255, 50/255), [])
+  const daySunColor = useMemo(() => new THREE.Color(255/255, 248/255, 220/255), [])
+  const sunsetColor = useMemo(() => new THREE.Color(255/255, 179/255, 71/255), [])
+  const nightSunColor = useMemo(() => new THREE.Color(42/255, 48/255, 80/255), [])
+  const dayHemisphereSky = useMemo(() => new THREE.Color(135/255, 206/255, 235/255), [])
+  const nightHemisphereSky = useMemo(() => new THREE.Color(10/255, 16/255, 48/255), [])
+  const dayHemisphereGround = useMemo(() => new THREE.Color(61/255, 92/255, 61/255), [])
+  const nightHemisphereGround = useMemo(() => new THREE.Color(26/255, 42/255, 26/255), [])
+  const dayFog = useMemo(() => new THREE.Color(1, 1, 1), [])
+  const sunsetFog = useMemo(() => new THREE.Color(255/255, 153/255, 102/255), [])
+  const nightFog = useMemo(() => new THREE.Color(10/255, 16/255, 32/255), [])
+  
+  // Temp colors for lerping
+  const tempColor = useMemo(() => new THREE.Color(), [])
+  const tempColor2 = useMemo(() => new THREE.Color(), [])
+  
+  useFrame(() => {
+    const timeOfDay = timeOfDayRef.current
     const dayAmount = Math.cos(timeOfDay * Math.PI * 2) * 0.5 + 0.5
     
-    // Smooth interpolation for sky parameters
-    // Use smoothstep-like curve for more natural transition
-    const smoothDayAmount = dayAmount * dayAmount * (3 - 2 * dayAmount)
-    
-    return {
-      turbidity: 0.1 + smoothDayAmount * 9.9, // 0.1 to 10
-      rayleigh: 0.1 + smoothDayAmount * 1.9, // 0.1 to 2
-      mieCoefficient: 0.001 + smoothDayAmount * 0.004, // 0.001 to 0.005
-      mieDirectionalG: 0.999 - smoothDayAmount * 0.899, // 0.999 to 0.1
+    // Update sun position
+    if (sunRef.current) {
+      const angle = timeOfDay * Math.PI * 2
+      sunRef.current.position.set(
+        Math.sin(angle) * 400,
+        Math.cos(angle) * 300,
+        100
+      )
+      sunRef.current.intensity = Math.max(0.1, dayAmount * 1.5)
+      
+      // Update sun color
+      if (dayAmount > 0.5) {
+        const t = (dayAmount - 0.5) / 0.5
+        tempColor.copy(sunsetColor).lerp(daySunColor, t)
+      } else if (dayAmount > 0.15) {
+        const t = (dayAmount - 0.15) / 0.35
+        tempColor.copy(nightSunColor).lerp(sunsetColor, t)
+      } else {
+        tempColor.copy(nightSunColor)
+      }
+      sunRef.current.color.copy(tempColor)
     }
-  }, [timeOfDay])
+    
+    // Update ambient light
+    if (ambientRef.current) {
+      tempColor.copy(nightAmbient).lerp(dayAmbient, dayAmount)
+      ambientRef.current.color.copy(tempColor)
+    }
+    
+    // Update hemisphere light
+    if (hemisphereRef.current) {
+      tempColor.copy(nightHemisphereSky).lerp(dayHemisphereSky, dayAmount)
+      tempColor2.copy(nightHemisphereGround).lerp(dayHemisphereGround, dayAmount)
+      hemisphereRef.current.color.copy(tempColor)
+      hemisphereRef.current.groundColor.copy(tempColor2)
+      hemisphereRef.current.intensity = 0.2 + dayAmount * 0.5
+    }
+    
+    // Update fog
+    if (scene.fog) {
+      const fog = scene.fog as THREE.Fog
+      if (dayAmount > 0.5) {
+        const t = (dayAmount - 0.5) / 0.5
+        tempColor.copy(sunsetFog).lerp(dayFog, t)
+      } else if (dayAmount > 0.15) {
+        const t = (dayAmount - 0.15) / 0.35
+        tempColor.copy(nightFog).lerp(sunsetFog, t)
+      } else {
+        tempColor.copy(nightFog)
+      }
+      fog.color.copy(tempColor)
+    }
+  })
   
   return (
     <>
-      {/* Player */}
-      <PlayerSphere />
-      
-      {/* Sky */}
-      <Sky 
-        distance={1000}
-        sunPosition={sunPosition}
-        turbidity={skyParams.turbidity}
-        rayleigh={skyParams.rayleigh}
-        mieCoefficient={skyParams.mieCoefficient}
-        mieDirectionalG={skyParams.mieDirectionalG}
-      />
-      
-      {/* Night sky elements */}
-      <Stars timeOfDay={timeOfDay} />
-      <Moon timeOfDay={timeOfDay} />
-      
-      {/* Fog for atmosphere */}
-      <fog attach="fog" args={[lighting.fogColor, 0, TERRAIN_DIMENSIONS.FOG_FAR]} />
-      
-      {/* Lighting */}
-      <ambientLight intensity={lighting.ambientIntensity} color={lighting.ambientColor} />
+      <ambientLight ref={ambientRef} intensity={1} />
       <directionalLight 
-        position={sunPosition}
-        intensity={lighting.directionalIntensity}
-        color={lighting.directionalColor}
+        ref={sunRef}
+        position={[0, 300, 100]}
+        intensity={1.5}
         castShadow
-                shadow-radius={4}
-
-        shadow-mapSize-width={4096}
-        shadow-mapSize-height={4096}
+        shadow-radius={4}
+        shadow-mapSize-width={2048}
+        shadow-mapSize-height={2048}
         shadow-camera-far={3000}
         shadow-camera-left={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
         shadow-camera-right={TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
@@ -2311,8 +2514,88 @@ function Scene() {
         shadow-camera-bottom={-TERRAIN_DIMENSIONS.SHADOW_CAMERA_SIZE}
       />
       <hemisphereLight 
-        args={[lighting.hemisphereSkyColor, lighting.hemisphereGroundColor, lighting.hemisphereIntensity]} 
+        ref={hemisphereRef}
+        args={['#87CEEB', '#3d5c3d', 0.7]} 
       />
+    </>
+  )
+}
+
+// OPTIMIZED: Dynamic sky component that updates sky directly without re-renders
+function DynamicSky({ timeOfDayRef }: { timeOfDayRef: React.MutableRefObject<number> }) {
+  const skyRef = useRef<any>(null!)
+  
+  useFrame(() => {
+    if (!skyRef.current) return
+    
+    const timeOfDay = timeOfDayRef.current
+    const dayAmount = Math.cos(timeOfDay * Math.PI * 2) * 0.5 + 0.5
+    const smoothDayAmount = dayAmount * dayAmount * (3 - 2 * dayAmount)
+    
+    // Update sun position
+    const angle = timeOfDay * Math.PI * 2
+    const sunPosition = [
+      Math.sin(angle) * 400,
+      Math.cos(angle) * 300,
+      100
+    ]
+    
+    // Update sky material uniforms directly
+    if (skyRef.current.material && skyRef.current.material.uniforms) {
+      const uniforms = skyRef.current.material.uniforms
+      if (uniforms.sunPosition) {
+        uniforms.sunPosition.value.set(sunPosition[0], sunPosition[1], sunPosition[2])
+      }
+      if (uniforms.turbidity) uniforms.turbidity.value = 0.1 + smoothDayAmount * 9.9
+      if (uniforms.rayleigh) uniforms.rayleigh.value = 0.1 + smoothDayAmount * 1.9
+      if (uniforms.mieCoefficient) uniforms.mieCoefficient.value = 0.001 + smoothDayAmount * 0.004
+      if (uniforms.mieDirectionalG) uniforms.mieDirectionalG.value = 0.999 - smoothDayAmount * 0.899
+    }
+  })
+  
+  return (
+    <Sky 
+      ref={skyRef}
+      distance={1000}
+      sunPosition={[0, 300, 100]}
+      turbidity={10}
+      rayleigh={2}
+      mieCoefficient={0.005}
+      mieDirectionalG={0.1}
+    />
+  )
+}
+
+// OPTIMIZED: Scene component uses refs for timeOfDay to avoid re-renders
+function Scene() {
+  // Time of day stored in ref to avoid re-renders - child components will read this ref
+  const timeOfDayRef = useRef(0)
+  
+  // Update time of day based on real time - no state updates!
+  useFrame((state) => {
+    const elapsed = state.clock.elapsedTime
+    // Complete cycle every CYCLE_DURATION seconds
+    const cycleProgress = (elapsed % DAY_NIGHT_CYCLE.CYCLE_DURATION) / DAY_NIGHT_CYCLE.CYCLE_DURATION
+    timeOfDayRef.current = cycleProgress + 0.1
+  })
+  
+  return (
+    <>
+      {/* Player */}
+      <PlayerSphere />
+      
+      {/* Sky - updated directly via refs */}
+      <DynamicSky timeOfDayRef={timeOfDayRef} />
+      
+      {/* Night sky elements - these need timeOfDay but update themselves */}
+      <DynamicStars timeOfDayRef={timeOfDayRef} />
+      <DynamicMoon timeOfDayRef={timeOfDayRef} />
+      
+      {/* Fog for atmosphere */}
+      <fog attach="fog" args={['#ffffff', 0, TERRAIN_DIMENSIONS.FOG_FAR]} />
+      
+      {/* Lighting - updated directly via refs */}
+      <DynamicLighting timeOfDayRef={timeOfDayRef} />
       
       {/* Landscape Elements */}
       <Terrain />
@@ -2341,19 +2624,78 @@ const keyMap = [
   { name: Controls.lookDown, keys: ['ArrowUp', 'KeyE'] },
 ]
 
-createRoot(document.getElementById('root') as HTMLElement).render(
-  <>
-    <KeyboardControls map={keyMap}>
-      <Canvas 
-        style={{ width: "100vw", height: "100vh" }}
-        camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
-        shadows="soft"
-      >
-        <Physics gravity={[0, -150, 0]}>
-          <Scene />
-        </Physics>
-      </Canvas>
-    </KeyboardControls>
-    <MobileControls />
-  </>,
-)
+// Return to player button - appears when in map mode
+function ReturnToPlayerButton({ mode, onReturnToPlayer }: { mode: ControlMode, onReturnToPlayer: () => void }) {
+  if (mode === 'player') return null
+  
+  return (
+    <button
+      onClick={onReturnToPlayer}
+      style={{
+        position: 'fixed',
+        bottom: 30,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        padding: '12px 24px',
+        fontSize: 24,
+        fontWeight: 'bold',
+        backgroundColor: 'rgba(255, 107, 53, 0.9)',
+        border: '3px solid rgba(255, 255, 255, 0.8)',
+        borderRadius: 12,
+        color: 'white',
+        cursor: 'pointer',
+        zIndex: 1001,
+        boxShadow: '0 4px 15px rgba(0, 0, 0, 0.3)',
+        transition: 'transform 0.1s, box-shadow 0.1s',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = 'translateX(-50%) scale(1.05)'
+        e.currentTarget.style.boxShadow = '0 6px 20px rgba(0, 0, 0, 0.4)'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = 'translateX(-50%) scale(1)'
+        e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 0, 0, 0.3)'
+      }}
+    >
+      📍 Return to Player
+    </button>
+  )
+}
+
+// App wrapper that manages control mode state
+function App() {
+  const [mode, setMode] = useState<ControlMode>('player')
+  
+  // Sync global state with React state
+  useEffect(() => {
+    controlModeState.setMode = (newMode: ControlMode) => {
+      controlModeState.mode = newMode
+      setMode(newMode)
+    }
+  }, [])
+  
+  const handleReturnToPlayer = useCallback(() => {
+    controlModeState.setMode('player')
+  }, [])
+  
+  return (
+    <ControlModeContext.Provider value={{ mode, setMode: controlModeState.setMode }}>
+      <KeyboardControls map={keyMap}>
+        <Canvas 
+          style={{ width: "100vw", height: "100vh" }}
+          camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
+          shadows="soft"
+        >
+          <Physics gravity={[0, -150, 0]}>
+            <Scene />
+          </Physics>
+          <MapControls enabled={mode === 'map'} />
+        </Canvas>
+      </KeyboardControls>
+      <MobileControls />
+      <ReturnToPlayerButton mode={mode} onReturnToPlayer={handleReturnToPlayer} />
+    </ControlModeContext.Provider>
+  )
+}
+
+createRoot(document.getElementById('root') as HTMLElement).render(<App />)
