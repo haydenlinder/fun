@@ -716,7 +716,7 @@ interface LaserData {
   createdAt: number
 }
 
-// OPTIMIZED: LaserBeam uses refs for opacity to avoid re-renders
+// LaserBeam component with proper timing and flash effect
 function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE.Vector3, createdAt: number }) {
   const groupRef = useRef<THREE.Group>(null!)
   const meshRef = useRef<THREE.Mesh>(null!)
@@ -726,8 +726,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   const light1Ref = useRef<THREE.PointLight>(null!)
   const light2Ref = useRef<THREE.PointLight>(null!)
   const light3Ref = useRef<THREE.PointLight>(null!)
-  const opacityRef = useRef(1)
-  const isDeadRef = useRef(false)
+  const [opacity, setOpacity] = useState(1)
   
   // Calculate beam geometry
   const { midpoint, length, rotation } = useMemo(() => {
@@ -744,40 +743,24 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
     return { midpoint, length, rotation: euler }
   }, [start, end])
   
-  useFrame((state) => {
-    if (isDeadRef.current) return
-    
-    const elapsed = state.clock.elapsedTime * 1000 - createdAt
-    const duration = 500 
+  useFrame(() => {
+    // Use performance.now() consistently with createdAt
+    const elapsed = performance.now() - createdAt
+    const duration = 200 
     
     if (elapsed > duration) {
-      opacityRef.current = 0
-      isDeadRef.current = true
+      setOpacity(0)
       if (groupRef.current) groupRef.current.visible = false
     } else {
       // Quick fade in, then fade out
       const fadeIn = Math.min(1, elapsed / 30)
       const fadeOut = Math.max(0, 1 - (elapsed - duration * 0.6) / (duration * 0.4))
-      opacityRef.current = fadeIn * fadeOut
-      
-      // Update materials directly without re-render
-      if (meshRef.current) {
-        (meshRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current
-      }
-      if (glowRef.current) {
-        (glowRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.4
-      }
-      if (impactRef.current) {
-        (impactRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.8
-      }
-      if (originRef.current) {
-        (originRef.current.material as THREE.MeshBasicMaterial).opacity = opacityRef.current * 0.8
-      }
-      if (light1Ref.current) light1Ref.current.intensity = opacityRef.current * 1000
-      if (light2Ref.current) light2Ref.current.intensity = opacityRef.current * 1000
-      if (light3Ref.current) light3Ref.current.intensity = opacityRef.current * 1000
+      setOpacity(fadeIn * fadeOut)
     }
   })
+  
+  // Calculate light intensities based on opacity
+  const lightIntensity = opacity * 1000
   
   return (
     <group ref={groupRef} position={midpoint} rotation={rotation}>
@@ -786,27 +769,27 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         ref={light1Ref}
         position={[0, length / 2, 0]} 
         color="#ff6a00" 
-        intensity={1000}
+        intensity={lightIntensity}
+        castShadow
         distance={300}
-        decay={2}
       />
       {/* Light emission from origin point */}
       <pointLight 
         ref={light2Ref}
         position={[0, -length / 2, 0]} 
         color="#ffe600" 
-        intensity={1000}
+        castShadow
+        intensity={lightIntensity}
         distance={200}
-        decay={2}
       />
       {/* Light emission along the beam */}
       <pointLight 
         ref={light3Ref}
+        castShadow
         position={[0, 0, 0]} 
         color="#ff4400" 
-        intensity={1000}
+        intensity={lightIntensity}
         distance={200}
-        decay={2}
       />
       {/* Inner bright core */}
       <mesh ref={meshRef}>
@@ -814,7 +797,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ff0000" 
           transparent 
-          opacity={1}
+          opacity={opacity}
         />
       </mesh>
       {/* Outer glow */}
@@ -823,7 +806,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ffb444" 
           transparent 
-          opacity={0.4}
+          opacity={opacity * 0.4}
         />
       </mesh>
       {/* Impact point glow */}
@@ -832,7 +815,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ff6a00" 
           transparent 
-          opacity={0.8}
+          opacity={opacity * 0.8}
         />
       </mesh>
       {/* Origin point glow */}
@@ -841,7 +824,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
         <meshBasicMaterial 
           color="#ffe600" 
           transparent 
-          opacity={0.8}
+          opacity={opacity * 0.8}
         />
       </mesh>
     </group>
@@ -1025,6 +1008,7 @@ function LaserSystem() {
           isDragging.current = true
           // Switch to map mode when dragging
           controlModeState.setMode('map')
+          mouseDownPos.current = null
         }
       }
     }
