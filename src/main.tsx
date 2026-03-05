@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
 import { useRef, useMemo, useEffect, useState, useCallback } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { MapControls, Sky } from '@react-three/drei'
+import { KeyboardControls, useKeyboardControls, Sky } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
@@ -1622,19 +1622,293 @@ function Rocks() {
   )
 }
 
+// Control key mappings for KeyboardControls (const object instead of enum for TypeScript compatibility)
+const Controls = {
+  forward: 'forward',
+  backward: 'backward',
+  left: 'left',
+  right: 'right',
+  jump: 'jump',
+  turnLeft: 'turnLeft',
+  turnRight: 'turnRight',
+  lookUp: 'lookUp',
+  lookDown: 'lookDown',
+} as const
+
+// Mobile joystick state (shared between components)
+const mobileInput = {
+  moveX: 0,
+  moveY: 0,
+  cameraX: 0,
+  cameraY: 0,
+}
+
+// Player sphere with keyboard controls (drei) and mobile touch support
+function PlayerSphere() {
+  const rigidBodyRef = useRef<RapierRigidBody>(null!)
+  const { camera } = useThree()
+  
+  // Get keyboard state from drei's KeyboardControls
+  const [, getKeys] = useKeyboardControls()
+  
+  // Camera rotation state
+  const cameraAngle = useRef(0)
+  const cameraPitch = useRef(0.3)
+  const cameraDistance = useRef(100)
+  
+  useFrame((_, delta) => {
+    if (!rigidBodyRef.current) return
+    
+    const moveSpeed = 300
+    const jumpForce = 5000
+    const turnSpeed = 2
+    const pitchSpeed = 1
+    
+    // Get keyboard state
+    const { forward, backward, left, right, jump, turnLeft, turnRight, lookUp, lookDown } = getKeys()
+    
+    // Handle camera rotation (keyboard + mobile)
+    if (turnLeft || mobileInput.cameraX < -0.2) cameraAngle.current += turnSpeed * delta
+    if (turnRight || mobileInput.cameraX > 0.2) cameraAngle.current -= turnSpeed * delta
+    if (lookUp || mobileInput.cameraY < -0.2) cameraPitch.current = Math.max(0.1, cameraPitch.current - pitchSpeed * delta)
+    if (lookDown || mobileInput.cameraY > 0.2) cameraPitch.current = Math.min(1.2, cameraPitch.current + pitchSpeed * delta)
+    
+    // Get camera direction for relative movement
+    const cameraDirection = new THREE.Vector3(
+      -Math.sin(cameraAngle.current),
+      0,
+      -Math.cos(cameraAngle.current)
+    ).normalize()
+    
+    // Calculate right vector
+    const rightVector = new THREE.Vector3()
+    rightVector.crossVectors(cameraDirection, new THREE.Vector3(0, 1, 0)).normalize()
+    
+    // Calculate movement direction (keyboard + mobile joystick)
+    const moveDirection = new THREE.Vector3()
+    
+    // Keyboard input
+    if (forward) moveDirection.add(cameraDirection)
+    if (backward) moveDirection.sub(cameraDirection)
+    if (left) moveDirection.sub(rightVector)
+    if (right) moveDirection.add(rightVector)
+    
+    // Mobile joystick input
+    if (Math.abs(mobileInput.moveY) > 0.1) {
+      const forwardAmount = cameraDirection.clone().multiplyScalar(-mobileInput.moveY)
+      moveDirection.add(forwardAmount)
+    }
+    if (Math.abs(mobileInput.moveX) > 0.1) {
+      const rightAmount = rightVector.clone().multiplyScalar(mobileInput.moveX)
+      moveDirection.add(rightAmount)
+    }
+    
+    if (moveDirection.length() > 0) {
+      moveDirection.normalize()
+      rigidBodyRef.current.applyImpulse(
+        { x: moveDirection.x * moveSpeed, y: 0, z: moveDirection.z * moveSpeed },
+        true
+      )
+    }
+    
+    // Jump
+    if (jump) {
+      const vel = rigidBodyRef.current.linvel()
+      if (Math.abs(vel.y) < 0.5) {
+        rigidBodyRef.current.applyImpulse({ x: 0, y: jumpForce, z: 0 }, true)
+      }
+    }
+    
+    // Update camera position
+    const pos = rigidBodyRef.current.translation()
+    const heightOffset = Math.sin(cameraPitch.current) * cameraDistance.current
+    const horizontalDist = Math.cos(cameraPitch.current) * cameraDistance.current
+    
+    const targetCameraPos = new THREE.Vector3(
+      pos.x + Math.sin(cameraAngle.current) * horizontalDist,
+      pos.y + heightOffset,
+      pos.z + Math.cos(cameraAngle.current) * horizontalDist
+    )
+    camera.position.lerp(targetCameraPos, 0.08)
+    camera.lookAt(pos.x, pos.y, pos.z)
+  })
+  
+  const startX = 0
+  const startZ = 0
+  const startY = getTerrainHeight(startX, startZ) + 5
+  
+  return (
+    <RigidBody
+      ref={rigidBodyRef}
+      position={[startX, startY, startZ]}
+      colliders="ball"
+      mass={5}
+      linearDamping={2}
+      angularDamping={0.5}
+      restitution={0.3}
+    >
+      <mesh castShadow>
+        <sphereGeometry args={[2, 32, 32]} />
+        <meshStandardMaterial color="#ff6b35" roughness={0.4} metalness={0.3} />
+      </mesh>
+    </RigidBody>
+  )
+}
+
+// Mobile virtual joystick component (rendered outside Canvas)
+function MobileJoystick({ side, onMove }: { side: 'left' | 'right', onMove: (x: number, y: number) => void }) {
+  const joystickRef = useRef<HTMLDivElement>(null)
+  const knobRef = useRef<HTMLDivElement>(null)
+  const touchId = useRef<number | null>(null)
+  const centerRef = useRef({ x: 0, y: 0 })
+  
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (touchId.current !== null) return
+    const touch = e.changedTouches[0]
+    touchId.current = touch.identifier
+    const rect = joystickRef.current?.getBoundingClientRect()
+    if (rect) {
+      centerRef.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    }
+  }, [])
+  
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const touch = e.changedTouches[i]
+      if (touch.identifier === touchId.current) {
+        const dx = touch.clientX - centerRef.current.x
+        const dy = touch.clientY - centerRef.current.y
+        const maxDist = 40
+        const dist = Math.min(Math.sqrt(dx * dx + dy * dy), maxDist)
+        const angle = Math.atan2(dy, dx)
+        const normX = (dist / maxDist) * Math.cos(angle)
+        const normY = (dist / maxDist) * Math.sin(angle)
+        
+        if (knobRef.current) {
+          knobRef.current.style.transform = `translate(${normX * maxDist}px, ${normY * maxDist}px)`
+        }
+        onMove(normX, normY)
+      }
+    }
+  }, [onMove])
+  
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      if (e.changedTouches[i].identifier === touchId.current) {
+        touchId.current = null
+        if (knobRef.current) {
+          knobRef.current.style.transform = 'translate(0px, 0px)'
+        }
+        onMove(0, 0)
+      }
+    }
+  }, [onMove])
+  
+  return (
+    <div
+      ref={joystickRef}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      style={{
+        position: 'fixed',
+        bottom: 30,
+        [side]: 30,
+        width: 120,
+        height: 120,
+        borderRadius: '50%',
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        border: '2px solid rgba(255, 255, 255, 0.4)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        touchAction: 'none',
+        zIndex: 1000,
+      }}
+    >
+      <div
+        ref={knobRef}
+        style={{
+          width: 50,
+          height: 50,
+          borderRadius: '50%',
+          backgroundColor: 'rgba(255, 255, 255, 0.6)',
+          transition: 'transform 0.05s',
+        }}
+      />
+    </div>
+  )
+}
+
+// Mobile controls overlay
+function MobileControls() {
+  const [isMobile, setIsMobile] = useState(false)
+  
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile('ontouchstart' in window || navigator.maxTouchPoints > 0)
+    }
+    checkMobile()
+    window.addEventListener('resize', checkMobile)
+    return () => window.removeEventListener('resize', checkMobile)
+  }, [])
+  
+  if (!isMobile) return null
+  
+  return (
+    <>
+      <MobileJoystick 
+        side="left" 
+        onMove={(x, y) => { mobileInput.moveX = x; mobileInput.moveY = y }}
+      />
+      <MobileJoystick 
+        side="right" 
+        onMove={(x, y) => { mobileInput.cameraX = x; mobileInput.cameraY = y }}
+      />
+      {/* Jump button */}
+      <button
+        onTouchStart={() => { 
+          // Trigger jump via a custom event or direct state
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
+        }}
+        onTouchEnd={() => {
+          window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
+        }}
+        style={{
+          position: 'fixed',
+          bottom: 160,
+          right: 50,
+          width: 70,
+          height: 70,
+          borderRadius: '50%',
+          backgroundColor: 'rgba(255, 107, 53, 0.6)',
+          border: '2px solid rgba(255, 255, 255, 0.4)',
+          color: 'white',
+          fontSize: 14,
+          fontWeight: 'bold',
+          touchAction: 'none',
+          zIndex: 1000,
+        }}
+      >
+        JUMP
+      </button>
+    </>
+  )
+}
+
 function Scene() {
   return (
     <>
-      {/* Camera Controls */}
-      <MapControls 
+      {/* Player */}
+      <PlayerSphere />
+      
+      {/* Camera Controls - disabled since camera follows player */}
+      {/* <MapControls 
         makeDefault
         maxPolarAngle={1.55}
-        // enableDamping
-        // dampingFactor={0.05}
         minDistance={50}
         maxDistance={1500}
-        // maxPolarAngle={Math.PI / 2 - 0.1}
-      />
+      /> */}
       
       {/* Sky */}
       <Sky 
@@ -1684,16 +1958,32 @@ function Scene() {
   )
 }
 
+// Key map for KeyboardControls
+const keyMap = [
+  { name: Controls.forward, keys: ['KeyW'] },
+  { name: Controls.backward, keys: ['KeyS'] },
+  { name: Controls.left, keys: ['KeyA'] },
+  { name: Controls.right, keys: ['KeyD'] },
+  { name: Controls.jump, keys: ['Space'] },
+  { name: Controls.turnLeft, keys: ['ArrowLeft'] },
+  { name: Controls.turnRight, keys: ['ArrowRight'] },
+  { name: Controls.lookUp, keys: ['ArrowDown', 'KeyQ'] },
+  { name: Controls.lookDown, keys: ['ArrowUp', 'KeyE'] },
+]
+
 createRoot(document.getElementById('root') as HTMLElement).render(
-  <Canvas 
-
-    style={{ width: "100vw", height: "100vh" }}
-    camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
-    shadows
-  >
-    <Physics gravity={[0, -9.81, 0]}>
-      <Scene />
-
-    </Physics>
-  </Canvas>,
+  <>
+    <KeyboardControls map={keyMap}>
+      <Canvas 
+        style={{ width: "100vw", height: "100vh" }}
+        camera={{ position: [TERRAIN_DIMENSIONS.HALF_SIZE, 50, -175], fov: 60, near: 0.1, far: TERRAIN_DIMENSIONS.CAMERA_FAR }}
+        shadows
+      >
+        <Physics gravity={[0, -150, 0]}>
+          <Scene />
+        </Physics>
+      </Canvas>
+    </KeyboardControls>
+    <MobileControls />
+  </>,
 )
