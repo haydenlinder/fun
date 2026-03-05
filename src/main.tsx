@@ -757,7 +757,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
       />
       {/* Inner bright core */}
       <mesh ref={meshRef}>
-        <cylinderGeometry args={[0.1, 0.1, length, 8]} />
+        <cylinderGeometry args={[0.3, 0.3, length, 8]} />
         <meshBasicMaterial 
           color="#ff0000" 
           transparent 
@@ -766,7 +766,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
       </mesh>
       {/* Outer glow */}
       <mesh ref={glowRef}>
-        <cylinderGeometry args={[0.15, 0.15, length, 8]} />
+        <cylinderGeometry args={[0.4, 0.4, length, 8]} />
         <meshBasicMaterial 
           color="#ffb444" 
           transparent 
