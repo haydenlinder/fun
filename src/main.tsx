@@ -711,7 +711,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   
   useFrame((state) => {
     const elapsed = state.clock.elapsedTime * 1000 - createdAt
-    const duration = 200 // Laser lasts 200ms
+    const duration = 500 
     
     if (elapsed > duration) {
       setOpacity(0)
@@ -757,7 +757,7 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
       />
       {/* Inner bright core */}
       <mesh ref={meshRef}>
-        <cylinderGeometry args={[0.05, 0.05, length, 8]} />
+        <cylinderGeometry args={[0.1, 0.1, length, 8]} />
         <meshBasicMaterial 
           color="#ff0000" 
           transparent 
