@@ -128,6 +128,128 @@ function ridgedNoise(x: number, y: number, octaves: number): number {
   return value / maxValue
 }
 
+// ============================================================================
+// TERRAIN ZONE CONFIGURATION
+// Single source of truth for all terrain elevation thresholds
+// Change these values to adjust where objects can be placed
+// ============================================================================
+const TERRAIN_ZONES = {
+  // Water level - anything below this is underwater
+  WATER_LEVEL: 0,
+  
+  // Grass zones (low elevation, flat areas)
+  GRASS_MIN: 0,
+  GRASS_MAX: 15,
+  
+  // Sheep grazing zone - flat grassy areas only
+  SHEEP_MIN: 0, //. water level
+  SHEEP_MAX: 5,
+  
+  // Tree zone - grassy to mid-elevation
+  TREE_MIN: 0,
+  TREE_MAX: 50,
+  
+  // Rock zone - above water, up to high mountain (but not peaks)
+  ROCK_MIN: 0,
+  ROCK_MAX: 75,
+  
+  // High altitude threshold for larger boulders
+  HIGH_ALTITUDE: 10,
+  
+  // Mountain zones for terrain coloring reference
+  DEEP_VALLEY: -30,
+  VALLEY: -15,
+  LOW_VALLEY: -5,
+  LOW_GRASS: 5,
+  MID_ELEVATION: 15,
+  CLIFF_TOPS: 30,
+  MOUNTAIN_SLOPES: 60,
+  HIGH_MOUNTAIN: 100,
+  NEAR_PEAK: 140,
+}
+
+function isSheepZone(height: number): boolean {
+  return height > TERRAIN_ZONES.SHEEP_MIN && height < TERRAIN_ZONES.SHEEP_MAX
+}
+
+function isTreeZone(height: number): boolean {
+  return height > TERRAIN_ZONES.TREE_MIN && height < TERRAIN_ZONES.TREE_MAX
+}
+
+function isRockZone(height: number): boolean {
+  return height > TERRAIN_ZONES.ROCK_MIN && height < TERRAIN_ZONES.ROCK_MAX
+}
+
+function isHighAltitude(height: number): boolean {
+  return height > TERRAIN_ZONES.HIGH_ALTITUDE
+}
+
+// ============================================================================
+// TERRAIN HEIGHT CALCULATION
+// ============================================================================
+
+// Core terrain height calculation at noise coordinates (x, z are in noise space: 0-8 range)
+// This is the single source of truth for terrain height - all placement uses this
+function calculateTerrainHeightAtNoiseCoords(x: number, z: number): number {
+  // Base terrain - rolling hills (multiple octaves of noise)
+  let height = fbm(x, z, 6, 2, 0.5) * 30
+  
+  // Continental/biome-scale variation - creates large elevation differences
+  const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
+  
+  // MASSIVE Mountains - use ridged noise for dramatic towering peaks
+  const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
+  const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
+  const mountainHeight = mountainNoise * mountainMask * 200
+  
+  // Steep cliffs - create dramatic vertical drops
+  const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
+  const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 150
+  const cliffContribution = Math.min(cliffiness * 3, 60) * Math.max(0, cliffNoise + 0.2)
+  
+  // Deep valley carving - creates dramatic canyons and gorges
+  const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
+  const valleyDepth = Math.max(0, -valleyNoise - 0.1) * 100
+  
+  // Plateaus - elevated flat areas
+  const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
+  const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
+  const plateauHeight = plateauMask > 0.1 ? plateauMask * 50 : 0
+  
+  // Detail noise for rocky texture
+  const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 5
+  
+  // Combine all features
+  height += continentalNoise * 25
+  height += mountainHeight
+  height += cliffContribution
+  height -= valleyDepth
+  height += plateauHeight
+  height += detailNoise
+  
+  // Cave entrance depressions - carve holes into hillsides
+  const caveNoise = fbm(x * 0.8 + 400, z * 0.8 + 400, 3, 2, 0.5)
+  if (caveNoise > 0.4 && height > 5) {
+    // Create a depression that could be a cave entrance
+    const caveDepth = (caveNoise - 0.4) * 8
+    height -= caveDepth
+  }
+  
+  return height
+}
+
+// Helper to get terrain height at a world position (used by objects for placement/collision)
+// Terrain is 1000x1000, centered at origin (-500 to +500)
+function getTerrainHeight(worldX: number, worldZ: number): number {
+  // Convert world position to normalized [0,1] then to noise coordinates
+  const nx = (worldX + 500) / 1000  // Maps -500..500 to 0..1
+  const nz = (worldZ + 500) / 1000
+  const x = nx * 8  // Same scaling as generateHeightData
+  const z = nz * 8
+  
+  return calculateTerrainHeightAtNoiseCoords(x, z)
+}
+
 // Generate height map data for terrain with Minecraft-style procedural generation
 function generateHeightData(width: number, depth: number, scale: number) {
   const data = []
@@ -141,49 +263,8 @@ function generateHeightData(width: number, depth: number, scale: number) {
       const x = nx * 8 // Gives us 8 "tiles" of noise across terrain
       const z = nz * 8
       
-      // Base terrain - rolling hills (multiple octaves of noise)
-      let height = fbm(x, z, 6, 2, 0.5) * 30
-      
-      // Continental/biome-scale variation - creates large elevation differences
-      const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
-      
-      // MASSIVE Mountains - use ridged noise for dramatic towering peaks
-      const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
-      const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
-      const mountainHeight = mountainNoise * mountainMask * 200
-      
-      // Steep cliffs - create dramatic vertical drops
-      const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
-      const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 150
-      const cliffContribution = Math.min(cliffiness * 3, 60) * Math.max(0, cliffNoise + 0.2)
-      
-      // Deep valley carving - creates dramatic canyons and gorges
-      const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
-      const valleyDepth = Math.max(0, -valleyNoise - 0.1) * 100
-      
-      // Plateaus - elevated flat areas
-      const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
-      const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
-      const plateauHeight = plateauMask > 0.1 ? plateauMask * 50 : 0
-      
-      // Detail noise for rocky texture
-      const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 5
-      
-      // Combine all features
-      height += continentalNoise * 25
-      height += mountainHeight
-      height += cliffContribution
-      height -= valleyDepth
-      height += plateauHeight
-      height += detailNoise
-      
-      // Cave entrance depressions - carve holes into hillsides
-      const caveNoise = fbm(x * 0.8 + 400, z * 0.8 + 400, 3, 2, 0.5)
-      if (caveNoise > 0.4 && height > 5) {
-        // Create a depression that could be a cave entrance
-        const caveDepth = (caveNoise - 0.4) * 8
-        height -= caveDepth
-      }
+      // Use the shared height calculation function
+      const height = calculateTerrainHeightAtNoiseCoords(x, z)
       
       data.push(height * scale)
     }
@@ -223,56 +304,51 @@ function Terrain() {
       const height = positions[i * 3 + 1]
       
       let r, g, b
-      if (height < -30) {
-        // Extremely deep valleys - dark muddy brown
-        r = 0.2
-        g = 0.22
-        b = 0.15
-      } else if (height < -15) {
+      if (height < 1) {
         // Very deep valleys - dark sandy brown
         r = 0.25
         g = 0.28
         b = 0.18
-      } else if (height < -5) {
+      } else if (height < 25) {
         // Deep valleys - darker green/brown
         r = 0.2
         g = 0.35
         b = 0.15
-      } else if (height < 5) {
+      } else if (height < 50) {
         // Low areas - grass green
         r = 0.3
         g = 0.5
         b = 0.2
-      } else if (height < 15) {
+      } else if (height < 75) {
         // Mid elevation - lighter green
         r = 0.4
         g = 0.6
         b = 0.25
-      } else if (height < 30) {
+      } else if (height < 90) {
         // Higher areas - brownish (cliff/hill tops)
         r = 0.5
         g = 0.45
         b = 0.3
-      } else if (height < 60) {
+      } else if (height < 100) {
         // Mountain slopes - rocky gray
         r = 0.55
         g = 0.5
         b = 0.45
-      } else if (height < 100) {
+      } else if (height < 105) {
         // High mountain - darker rocky
         r = 0.45
         g = 0.42
         b = 0.4
-      } else if (height < 140) {
+      } else if (height < 110) {
         // Near peak - lighter rocky with hints of snow
         r = 0.65
         g = 0.63
         b = 0.62
       } else {
         // Snow caps - white/light gray (above 140)
-        r = 0.9
-        g = 0.92
-        b = 0.95
+        r = .7
+        g = .8
+        b = 1
       }
       
       // Add some variation
@@ -436,8 +512,8 @@ function Trees() {
       const z = (rng() - 0.5) * 900
       const height = getTerrainHeight(x, z)
       
-      // Only place trees in grassy areas (not underwater, not on high mountains)
-      if (height > 0 && height < 50) {
+      // Only place trees in valid tree zones (uses terrain system)
+      if (isTreeZone(height)) {
         treeData.push({ x, y: height, z, scale: 0.5 + rng() * 2 })
       }
     }
@@ -934,61 +1010,6 @@ function LaserSystem() {
   )
 }
 
-// Helper to get terrain height at a position using the same noise as terrain generation
-function getTerrainHeight(worldX: number, worldZ: number): number {
-  // Convert world position to normalized [0,1] then to noise coordinates
-  // Terrain is 1000x1000, centered at origin (-500 to +500)
-  const nx = (worldX + 500) / 1000  // Maps -500..500 to 0..1
-  const nz = (worldZ + 500) / 1000
-  const x = nx * 8  // Same scaling as generateHeightData
-  const z = nz * 8
-  
-  // Base terrain - rolling hills (multiple octaves of noise)
-  let height = fbm(x, z, 6, 2, 0.5) * 30
-  
-  // Continental/biome-scale variation - creates large elevation differences
-  const continentalNoise = fbm(x * 0.3, z * 0.3, 3, 2, 0.5)
-  
-  // MASSIVE Mountains - use ridged noise for dramatic towering peaks
-  const mountainNoise = ridgedNoise(x * 0.5, z * 0.5, 5)
-  const mountainMask = Math.max(0, fbm(x * 0.2 + 100, z * 0.2 + 100, 2, 2, 0.5) + 0.3)
-  const mountainHeight = mountainNoise * mountainMask * 200
-  
-  // Steep cliffs - create dramatic vertical drops
-  const cliffNoise = fbm(x * 0.4 + 50, z * 0.4 + 50, 4, 2, 0.5)
-  const cliffiness = Math.abs(fbm(x * 0.4 + 50.1, z * 0.4 + 50, 4, 2, 0.5) - cliffNoise) * 150
-  const cliffContribution = Math.min(cliffiness * 3, 60) * Math.max(0, cliffNoise + 0.2)
-  
-  // Deep valley carving - creates dramatic canyons and gorges
-  const valleyNoise = fbm(x * 0.25 + 200, z * 0.25 + 200, 3, 2, 0.5)
-  const valleyDepth = Math.max(0, -valleyNoise - 0.1) * 100
-  
-  // Plateaus - elevated flat areas
-  const plateauNoise = fbm(x * 0.15 + 300, z * 0.15 + 300, 2, 2, 0.5)
-  const plateauMask = Math.max(0, plateauNoise - 0.3) * 2
-  const plateauHeight = plateauMask > 0.1 ? plateauMask * 50 : 0
-  
-  // Detail noise for rocky texture
-  const detailNoise = fbm(x * 3, z * 3, 3, 2, 0.5) * 5
-  
-  // Combine all features
-  height += continentalNoise * 25
-  height += mountainHeight
-  height += cliffContribution
-  height -= valleyDepth
-  height += plateauHeight
-  height += detailNoise
-  
-  // Cave entrance depressions
-  const caveNoise = fbm(x * 0.8 + 400, z * 0.8 + 400, 3, 2, 0.5)
-  if (caveNoise > 0.4 && height > 5) {
-    const caveDepth = (caveNoise - 0.4) * 8
-    height -= caveDepth
-  }
-  
-  return height
-}
-
 // Single sheep with physics body - now destructible
 function SingleSheep({ initialX, initialZ, scale, phase }: { 
   initialX: number
@@ -1013,7 +1034,8 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
       const testX = initialX + Math.cos(angle) * distance
       const testZ = initialZ + Math.sin(angle) * distance
       const testHeight = getTerrainHeight(testX, testZ)
-      if (testHeight > 0 && testHeight <= 3.5) {
+      // Use terrain system to check if valid sheep zone
+      if (isSheepZone(testHeight)) {
         targetX = testX
         targetZ = testZ
         break
@@ -1131,9 +1153,9 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
         sheep.targetX = Math.max(-250, Math.min(250, sheep.targetX))
         sheep.targetZ = Math.max(-250, Math.min(250, sheep.targetZ))
         
-        // Check if target is valid terrain
+        // Check if target is valid terrain (uses terrain system)
         const targetHeight = getTerrainHeight(sheep.targetX, sheep.targetZ)
-        if (targetHeight < 0 || targetHeight > 3.5) {
+        if (!isSheepZone(targetHeight)) {
           // Invalid target, try to find a valid one nearby
           let foundValid = false
           for (let attempt = 0; attempt < 5; attempt++) {
@@ -1142,7 +1164,7 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
             const testX = currentX + Math.cos(retryAngle) * retryDist
             const testZ = currentZ + Math.sin(retryAngle) * retryDist
             const testHeight = getTerrainHeight(testX, testZ)
-            if (testHeight >= 0 && testHeight <= 3.5) {
+            if (isSheepZone(testHeight)) {
               sheep.targetX = testX
               sheep.targetZ = testZ
               foundValid = true
@@ -1189,7 +1211,8 @@ function SingleSheep({ initialX, initialZ, scale, phase }: {
           const testX = currentX + Math.cos(newAngle) * newDist
           const testZ = currentZ + Math.sin(newAngle) * newDist
           const testHeight = getTerrainHeight(testX, testZ)
-          if (testHeight >= 0 && testHeight <= 3.5 && 
+          // Use terrain system for validation
+          if (isSheepZone(testHeight) && 
               Math.abs(testX) < 250 && Math.abs(testZ) < 250) {
             sheep.targetX = testX
             sheep.targetZ = testZ
@@ -1335,8 +1358,8 @@ function Sheep() {
       const z = (Math.random() - 0.5) * 500
       const height = getTerrainHeight(x, z)
       
-      // Only place sheep on grass areas (above water, not too steep)
-      if (height > 0 && height < 3.5) {
+      // Only place sheep in valid sheep zones (uses terrain system)
+      if (isSheepZone(height)) {
         data.push({ 
           x, 
           z,
@@ -1529,11 +1552,10 @@ function Rocks() {
       const z = (rng() - 0.5) * 900
       const height = getTerrainHeight(x, z)
       
-      // Place rocks everywhere except deep underwater
-      if (height > 0 && height < 75) {
-        // More rocks on mountain slopes and cliffs
-        const isHighAltitude = height > 10
-        const scale = isHighAltitude 
+      // Place rocks in valid rock zones (uses terrain system)
+      if (isRockZone(height)) {
+        // More rocks on mountain slopes and cliffs (uses terrain system)
+        const scale = isHighAltitude(height) 
           ? 0.5 + rng() * 3 // Bigger boulders on mountains
           : 0.3 + rng() * (rng() > 0.9 ? 4 : 1)
         
