@@ -721,16 +721,6 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
       const fadeOut = Math.max(0, 1 - (elapsed - duration * 0.6) / (duration * 0.4))
       setOpacity(fadeIn * fadeOut)
       
-      // Pulse effect
-      const pulse = 1 + Math.sin(elapsed * 0.05) * 0.2
-      if (meshRef.current) {
-        meshRef.current.scale.x = pulse
-        meshRef.current.scale.z = pulse
-      }
-      if (glowRef.current) {
-        glowRef.current.scale.x = pulse * 1.5
-        glowRef.current.scale.z = pulse * 1.5
-      }
     }
   })
   
@@ -738,6 +728,33 @@ function LaserBeam({ start, end, createdAt }: { start: THREE.Vector3, end: THREE
   
   return (
     <group position={midpoint} rotation={rotation}>
+      {/* Light emission from impact point */}
+      <pointLight 
+        position={[0, length / 2, 0]} 
+        color="#ff6a00" 
+        intensity={opacity * 1000}
+        castShadow
+        distance={300}
+        decay={2}
+      />
+      {/* Light emission from origin point */}
+      <pointLight 
+        position={[0, -length / 2, 0]} 
+        color="#ffe600" 
+        castShadow
+        intensity={opacity * 1000}
+        distance={200}
+        decay={2}
+      />
+      {/* Light emission along the beam */}
+      <pointLight 
+      castShadow
+        position={[0, 0, 0]} 
+        color="#ff4400" 
+        intensity={opacity * 1000}
+        distance={200}
+        decay={2}
+      />
       {/* Inner bright core */}
       <mesh ref={meshRef}>
         <cylinderGeometry args={[0.05, 0.05, length, 8]} />
@@ -986,16 +1003,8 @@ function LaserSystem() {
       const intersects = raycaster.intersectObjects(scene.children, true)
       
       if (intersects.length > 0) {
-        // Calculate the center of the screen in world coordinates
-        // This is done by raycasting from the center of the screen (0, 0 in NDC)
-        const centerRay = new THREE.Raycaster()
-        centerRay.setFromCamera(new THREE.Vector2(0, 0), camera)
-        
-        // Start the laser from a point at the center of screen, near the camera
-        // This creates the effect of firing from the center of the viewport
-        const start = camera.position.clone()
-        const centerDirection = centerRay.ray.direction.clone()
-        start.add(centerDirection.multiplyScalar(2)) // Start 2 units in front of camera at center
+        // Start the laser from the player's sphere position
+        const start = new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z)
         
         // Get the hit point as the end of the laser
         const end = intersects[0].point.clone()
@@ -1644,6 +1653,13 @@ const mobileInput = {
   jump: false,
 }
 
+// Player position state (shared between PlayerSphere and LaserSystem)
+const playerPosition = {
+  x: 0,
+  y: 0,
+  z: 0,
+}
+
 // Player sphere with keyboard controls (drei) and mobile touch support
 function PlayerSphere() {
   const rigidBodyRef = useRef<RapierRigidBody>(null!)
@@ -1720,8 +1736,14 @@ function PlayerSphere() {
       }
     }
     
-    // Update camera position
+    // Update camera position and shared player position
     const pos = rigidBodyRef.current.translation()
+    
+    // Update shared player position for laser system
+    playerPosition.x = pos.x
+    playerPosition.y = pos.y
+    playerPosition.z = pos.z
+    
     const heightOffset = Math.sin(cameraPitch.current) * cameraDistance.current
     const horizontalDist = Math.cos(cameraPitch.current) * cameraDistance.current
     
