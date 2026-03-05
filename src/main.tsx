@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { createRoot } from 'react-dom/client'
 import { useRef, useMemo, useEffect, useState, useCallback, createContext, useContext } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { KeyboardControls, useKeyboardControls, Sky, MapControls } from '@react-three/drei'
+import { KeyboardControls, useKeyboardControls, Sky, MapControls, RoundedBox, Text3D, Center } from '@react-three/drei'
 import { Physics, RigidBody, CuboidCollider } from '@react-three/rapier'
 import type { RapierRigidBody } from '@react-three/rapier'
 import { DestructibleMesh, FractureOptions } from '@dgreenheck/three-pinata'
@@ -1539,6 +1539,93 @@ function DestructibleRock({ x, y, z, scale, rotY }: { x: number, y: number, z: n
   )
 }
 
+// Font URL for Text3D (Inter Bold from Google Fonts converted to typeface.js format)
+const FONT_URL = 'https://cdn.jsdelivr.net/npm/three/examples/fonts/helvetiker_bold.typeface.json'
+
+// Destructible TypeScript Block - blue cube with "TS" letters using Text3D
+function DestructibleTypeScriptBlock({ x, y, z, scale }: { x: number, y: number, z: number, scale: number }) {
+  const [destroyed, setDestroyed] = useState(false)
+  const [fragments, setFragments] = useState<THREE.Mesh[]>([])
+  
+  // TypeScript blue color
+  const tsBlue = 0x3178C6
+  const tsBlueLight = 0x4A90D9
+  const white = 0xFFFFFF
+  
+  const handleClick = useCallback(() => {
+    if (destroyed) return
+    
+    // Create materials
+    const blueMat = new THREE.MeshStandardMaterial({ color: tsBlue, roughness: 0.3, metalness: 0.1 })
+    const blueInnerMat = new THREE.MeshStandardMaterial({ color: tsBlueLight, roughness: 0.3, metalness: 0.1 })
+    
+    const allFragments: THREE.Mesh[] = []
+    
+    const options = new FractureOptions({
+      fractureMethod: 'voronoi',
+      fragmentCount: 15,
+      voronoiOptions: {
+        mode: '3D',
+      },
+    })
+    
+    // Fracture main cube
+    const cubeGeo = new THREE.BoxGeometry(2, 2, 2, 4, 4, 4)
+    const cubeMesh = new DestructibleMesh(cubeGeo, blueMat, blueInnerMat)
+    cubeMesh.scale.setScalar(scale)
+    cubeMesh.fracture(options, (fragment) => {
+      fragment.position.add(new THREE.Vector3(x, y, z))
+      allFragments.push(fragment)
+    })
+    
+    setFragments(allFragments)
+    setDestroyed(true)
+    
+    // Play blast sound effect
+    playBlastSound()
+  }, [destroyed, x, y, z, scale])
+  
+  if (destroyed) {
+    return (
+      <FragmentsContainer 
+        fragments={fragments} 
+      />
+    )
+  }
+  
+  return (
+    <group position={[x, y, z]} rotation={[0,0,0]} scale={scale} onClick={handleClick}>
+      {/* Main blue cube with rounded edges using drei RoundedBox */}
+      <RoundedBox args={[2, 2, 2]} radius={0.15} smoothness={4} castShadow receiveShadow>
+        <meshStandardMaterial 
+          color={tsBlue}
+          roughness={0.3}
+          metalness={0.1}
+        />
+      </RoundedBox>
+      
+      {/* "TS" text using Text3D from drei */}
+      <Center position={[.2, -0.3, 1.01]}>
+        <Text3D
+          font={FONT_URL}
+          size={0.7}
+          height={0.15}
+          curveSegments={12}
+          bevelEnabled
+          bevelThickness={0.02}
+          bevelSize={0.02}
+          bevelOffset={0}
+          bevelSegments={3}
+          castShadow
+        >
+          TS
+          <meshStandardMaterial color={white} roughness={0.4} />
+        </Text3D>
+      </Center>
+    </group>
+  )
+}
+
 
 // Single cloud made of multiple spheres for a fluffy look
 function Cloud({ initialX, initialY, initialZ, scale, speed }: { 
@@ -2350,6 +2437,14 @@ function Scene() {
       <Rocks />
       <Sheep />
       <Clouds />
+      
+      {/* TypeScript Block - destructible */}
+      <DestructibleTypeScriptBlock 
+        x={0} 
+        y={getTerrainHeight(0, -180) + 5} 
+        z={-180} 
+        scale={8} 
+      />
       
       {/* Laser System */}
       <LaserSystem />
